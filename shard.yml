@@ -1,5 +1,5 @@
 name: crxml
-version: 0.1.0
+version: 0.1.0-alpha
 
 authors:
   - Julien Portalier <julien@portalier.com>
@@ -10,5 +10,6 @@ description: |
 development_dependencies:
   minitest:
     github: ysbaddaden/minitest.cr
+    commit: bfc73a6196129e59b6c05d49d69e542f83a5939f
 
 license: Apache-2.0

@@ -1,5 +1,5 @@
 require "minitest/autorun"
 require "minitest/spec"
-require "../src/*"
+require "../src/crxml"
 
 include CRXML

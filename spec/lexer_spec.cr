@@ -17,19 +17,19 @@ describe CRXML::Lexer do
     end
 
     it "tokenizes xml declaration" do
-      assert_tokens [{:xmldecl}], xml: "<?xml?>"
-      assert_tokens [{:xmldecl}], xml: "<?xml\t \r\n?>"
+      assert_document [{:xmldecl}], xml: "<?xml?>"
+      assert_document [{:xmldecl}], xml: "<?xml\t \r\n?>"
 
-      assert_tokens [{:xmldecl}, {:attribute, "version", "1.0"}], xml: "<?xml version='1.0'?>"
-      assert_tokens [{:xmldecl}, {:attribute, "version", "1.1"}], xml: %(<?xml version="1.1"?>)
+      assert_document [{:xmldecl}, {:attribute, "version", "1.0"}], xml: "<?xml version='1.0'?>"
+      assert_document [{:xmldecl}, {:attribute, "version", "1.1"}], xml: %(<?xml version="1.1"?>)
 
-      assert_tokens [{:xmldecl}, {:attribute, "encoding", "utf-8"}], xml: "<?xml encoding='utf-8'?>"
-      assert_tokens [{:xmldecl}, {:attribute, "encoding", "iso-8859-1"}], xml: %(<?xml encoding="iso-8859-1"?>)
+      assert_document [{:xmldecl}, {:attribute, "encoding", "utf-8"}], xml: "<?xml encoding='utf-8'?>"
+      assert_document [{:xmldecl}, {:attribute, "encoding", "iso-8859-1"}], xml: %(<?xml encoding="iso-8859-1"?>)
 
-      assert_tokens [{:xmldecl}, {:attribute, "standalone", "yes"}], xml: %(<?xml standalone="yes"?>)
-      assert_tokens [{:xmldecl}, {:attribute, "standalone", "no"}], xml: "<?xml standalone='no'?>"
+      assert_document [{:xmldecl}, {:attribute, "standalone", "yes"}], xml: %(<?xml standalone="yes"?>)
+      assert_document [{:xmldecl}, {:attribute, "standalone", "no"}], xml: "<?xml standalone='no'?>"
 
-      assert_tokens [
+      assert_document [
         {:xmldecl},
         {:attribute, "encoding", "UTF-8"},
         {:attribute, "standalone", "no"},
@@ -38,17 +38,19 @@ describe CRXML::Lexer do
     end
 
     it "tokenizes processing instructions" do
-      assert_tokens [{:pi, "key", ""}], xml: "<?key?>"
-      assert_tokens [{:pi, "key", ""}], xml: "<?key \t?>"
-      assert_tokens [{:pi, "key", "value"}], xml: "<?key value?>"
-      assert_tokens [{:pi, "key", "value "}], xml: "<?key value ?>"
-      assert_tokens [{:pi, "inst", "with some content"}], xml: "<?inst with some content?>"
+      assert_prolog [{:pi, "key", ""}], xml: "<?key?>"
+      assert_prolog [{:pi, "key", ""}], xml: "<?key \t?>"
+      assert_prolog [{:pi, "key", "value"}], xml: "<?key value?>"
+      assert_prolog [{:pi, "key", "value "}], xml: "<?key value ?>"
+      assert_prolog [{:pi, "inst", "with some content"}], xml: "<?inst with some content?>"
     end
 
     it "tokenizes comments" do
       assert_tokens [{:comment, ""}], xml: "<!---->"
       assert_tokens [{:comment, " "}], xml: "<!-- -->"
       assert_tokens [{:comment, " - -- "}], xml: "<!-- - -- -->"
+      assert_tokens [{:comment, " a comment ->"}], xml: "<!-- a comment ->-->"
+      #assert_tokens [{:comment, "a-"}], xml: "<!--a--->"
       assert_tokens [{:comment, "azerty"}], xml: "<!--azerty-->"
       assert_tokens [{:comment, " declarations for <head> & <body> "}],
         xml: "<!-- declarations for <head> & <body> -->"
@@ -62,6 +64,7 @@ describe CRXML::Lexer do
       assert_tokens [{:cdata, ""}], xml: "<![CDATA[]]>"
       assert_tokens [{:cdata, " "}], xml: "<![CDATA[ ]]>"
       assert_tokens [{:cdata, " [] [[]] "}], xml: "<![CDATA[ [] [[]] ]]>"
+      assert_tokens [{:cdata, " []] ]>]] ]"}], xml: "<![CDATA[ []] ]>]] ]]]>"
       assert_tokens [{:cdata, "<greeting>Hello, world!</greeting>"}],
         xml: "<![CDATA[<greeting>Hello, world!</greeting>]]>"
     end
@@ -241,6 +244,7 @@ describe CRXML::Lexer do
 
     it "tokenizes pretty printed XML" do
       xml = <<-XML
+      <?xml version="1.1"?>
       <root>
         <bar>
           <foo></foo>
@@ -249,7 +253,10 @@ describe CRXML::Lexer do
       </root>
       XML
 
-      assert_tokens [
+      assert_document [
+        {:xmldecl},
+        {:attribute, "version", "1.1"},
+        # no {:text, "\n"}: whitespace is insignificant before the root element
         {:stag, "root"},
         {:text, "\n  "},
         {:stag, "bar"},
@@ -268,32 +275,53 @@ describe CRXML::Lexer do
     end
   end
 
+  # lexes the logical structure (elements)
   private def assert_tokens(expected, xml)
     actual = [] of {Symbol} | {Symbol, String} | {Symbol, String, String} | {Symbol, String, String}
-
-    Lexer.new(xml).tokenize do |token|
-      case token
-      when Lexer::Text
-        actual << {:text, token.content}
-      when Lexer::STag
-        actual << {:stag, token.name}
-      when Lexer::ETag
-        actual << {:etag, token.name}
-      when Lexer::Attribute
-        actual << {:attribute, token.name, token.value}
-      when Lexer::Comment
-        actual << {:comment, token.content}
-      when Lexer::CDATA
-        actual << {:cdata, token.content}
-      when Lexer::XmlDecl
-        actual << {:xmldecl}
-      when Lexer::PI
-        actual << {:pi, token.name, token.content}
-      else
-        raise "unknown token: #{token}"
-      end
-    end
-
+    lexer = Lexer.new(xml)
+    lexer.tokenize_logical_structures { |token| actual << transform_token(token) }
     assert_equal expected, actual
+  end
+
+  # lexes the optional prolog part until EOF or root element stag+attributes
+  private def assert_prolog(expected, xml)
+    actual = [] of {Symbol} | {Symbol, String} | {Symbol, String, String} | {Symbol, String, String}
+    lexer = Lexer.new(xml)
+    lexer.tokenize_prolog { |token| actual << transform_token(token) }
+    assert_equal expected, actual
+  end
+
+  # lexes a whole XML document, expecting the XML declaration, the optional
+  # prolog and optional element tree
+  private def assert_document(expected, xml)
+    actual = [] of {Symbol} | {Symbol, String} | {Symbol, String, String} | {Symbol, String, String}
+    lexer = Lexer.new(xml)
+    lexer.tokenize_xmldecl { |token| actual << transform_token(token) }
+    lexer.tokenize_prolog { |token| actual << transform_token(token) }
+    lexer.tokenize_logical_structures { |token| actual << transform_token(token) }
+    assert_equal expected, actual
+  end
+
+  private def transform_token(token)
+    case token
+    when Lexer::Text
+      {:text, token.content}
+    when Lexer::STag
+      {:stag, token.name}
+    when Lexer::ETag
+      {:etag, token.name}
+    when Lexer::Attribute
+      {:attribute, token.name, token.value}
+    when Lexer::Comment
+      {:comment, token.content}
+    when Lexer::CDATA
+      {:cdata, token.content}
+    when Lexer::XmlDecl
+      {:xmldecl}
+    when Lexer::PI
+      {:pi, token.name, token.content}
+    else
+      raise "unknown token: #{token}"
+    end
   end
 end

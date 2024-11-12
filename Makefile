@@ -1,10 +1,10 @@
 .POSIX:
 
 CRYSTAL = crystal
-CRFLAGS = --progress
+CRFLAGS = --progress --threads=28
 OPTS =
 
 spec: .phony
-	$(CRYSTAL) run $(CRFLAGS) spec/*_spec.cr -- $(OPTS)
+	$(CRYSTAL) run $(CRFLAGS) spec/*_spec.cr spec/**/*_spec.cr -- $(OPTS)
 
 .phony:

@@ -2,5 +2,5 @@ version: 2.0
 shards:
   minitest:
     git: https://github.com/ysbaddaden/minitest.cr.git
-    version: 1.3.0
+    version: 1.3.0+git.commit.bfc73a6196129e59b6c05d49d69e542f83a5939f
 

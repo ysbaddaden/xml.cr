@@ -1,18 +1,147 @@
-require "./node_set"
+# require "./dom"
 
 module CRXML
-  class DOMError < Exception
-  end
-
-  # TODO: Document(version, charset, doctype, root)
-  # TODO: Fragment(children)
-  # TODO: CDATA
-  # TODO: attributes
   # TODO: namespaces
   abstract class Node
+    getter! owner_document : Document
     getter! parent_node : Node
     getter! previous_sibling : Node
     getter! next_sibling : Node
+
+    def parent_element : Element
+      @parent_node.as(Element)
+    end
+
+    def parent_element? : Element?
+      @parent_node.try(&.as(Element))
+    end
+
+    def root_node : Node
+      parent_node.root_node
+    end
+
+    def root_node? : Node?
+      @parent_node.try(&.root_node?)
+    end
+
+    def root_element : Element
+      parent_node.root_node.as(Element)
+    end
+
+    def root_element? : Element?
+      @parent_node.try(&.root_node?.try(&.as(Element)))
+    end
+
+    def first_child : Node
+      first_child { raise NilAssertionError.new("Expected #first_child to not be nil") }
+    end
+
+    def first_child? : Node?
+      first_child { nil }
+    end
+
+    def first_child(&)
+      @children.head || yield
+    end
+
+    def last_child : Node
+      last_child { raise NilAssertionError.new("Expected #last_child to not be nil") }
+    end
+
+    def last_child? : Node?
+      last_child { nil }
+    end
+
+    def last_child(&)
+      @children.tail || yield
+    end
+
+    # def node_value : String?
+    #   nil
+    # end
+
+    def text_content : String?
+    end
+
+    def text_content(str : String::Builder) : Nil
+    end
+
+    # def normalize : Nil
+    # end
+
+    # def clone_node(deep = false) : Node
+    # end
+
+    # def ==(other : Node) : Bool
+    # end
+
+    # @[Flags]
+    # enum DocumentPosition
+    #   DISCONNECTED = 0x01
+    #   PRECEDING = 0x02
+    #   FOLLOWING = 0x04
+    #   CONTAINS = 0x08
+    #   CONTAINED_BY = 0x10
+    #   IMPLEMENTATION_SPECIFIC = 0x20
+    # end
+
+    # def compare_document_position : DocumentPosition
+    # end
+
+    def append(node : Node) : Nil
+      node.relink(self, @children.tail, nil)
+      node.owner_document = owner_document
+
+      if tail = @children.tail
+        tail.next_sibling = node
+        @children.tail = node
+      else
+        @children.head = node
+        @children.tail = node
+      end
+    end
+
+    def insert(node : Node, *, before : Node?) : Nil
+      raise DOMError.new("not a child of node") unless before.parent_node?.try(&.same?(self))
+
+      node.relink(self, before.previous_sibling?, before)
+      node.owner_document = owner_document
+
+      if n = before.previous_sibling?
+        n.next_sibling = node
+      else
+        @children.head = node
+      end
+      before.previous_sibling = node
+    end
+
+    def insert(node : Node, *, after : Node?) : Nil
+      raise DOMError.new("not a child of node") unless after.parent_node?.try(&.same?(self))
+
+      node.relink(self, after, after.next_sibling?)
+      node.owner_document = owner_document
+
+      if n = after.next_sibling?
+        n.previous_sibling = node
+      else
+        @children.tail = node
+      end
+      after.next_sibling = node
+    end
+
+    # def replace_child(node : Node, *, child : Node) : Nil
+    # end
+
+    def remove_child(node : Node) : Nil
+      raise DOMError.new("not a child of node") unless node.parent_node?.try(&.same?(self))
+
+      unlink_child(node)
+      node.unlink_siblings
+      node.link(nil, nil, nil)
+    end
+
+    protected def owner_document=(@owner_document : Document?)
+    end
 
     protected def parent_node=(@parent_node : Node?)
     end
@@ -21,42 +150,6 @@ module CRXML
     end
 
     protected def next_sibling=(@next_sibling : Node?)
-    end
-
-    def parent_element : Element
-      @parent_node.as(Element)
-    end
-
-    def parent_element? : Element?
-      @parent_node.as(Element?)
-    end
-
-    def previous_element_sibling : Element?
-      previous_element_sibling?.not_nil!
-    end
-
-    def previous_element_sibling? : Element?
-      node = @previous_sibling
-      while node
-        return node if node.is_a?(Element)
-        node = node.@previous_sibling
-      end
-    end
-
-    def next_element_sibling : Element?
-      next_element_sibling?.not_nil!
-    end
-
-    def next_element_sibling? : Element?
-      node = @next_sibling
-      while node
-        return node if node.is_a?(Element)
-        node = node.@next_sibling
-      end
-    end
-
-    def remove : Nil
-      relink(nil, nil, nil)
     end
 
     protected def relink(parent_node, previous_sibling, next_sibling) : Nil
@@ -77,169 +170,13 @@ module CRXML
       end
     end
 
-    # Serializes the element and all its child nodes as a XML string.
-    def to_xml : String
-      String.build { |str| to_xml(str) }
-    end
-
-    # Serializes the element and all its child nodes as XML.
-    abstract def to_xml(io : IO) : Nil
-
-    protected abstract def content(str : String::Builder) : Nil
-  end
-
-  # TODO: append(*nodes)
-  # TODO: insert(*nodes, before)
-  # TODO: insert(*nodes, after)
-  # TODO: before(*nodes)
-  # TODO: after(*nodes)
-  class Element < Node
-    property name : String
-
-    def initialize(@name : String)
-      @children = NodeSet.new
-    end
-
-    def first_child : Node
-      first_child?.not_nil!
-    end
-
-    def first_child? : Node?
-      @children.head
-    end
-
-    def last_child : Node
-      last_child?.not_nil!
-    end
-
-    def last_child? : Node?
-      @children.tail
-    end
-
-    def first_element_child : Node
-      first_element_child?.not_nil!
-    end
-
-    def first_element_child? : Node?
-      case node = @children.head
-      when Element
-        node
-      when Node
-        node.next_element_sibling?
-      end
-    end
-
-    def last_element_child : Node
-      last_element_child?.not_nil!
-    end
-
-    def last_element_child? : Node?
-      case node = @children.tail
-      when Element
-        node
-      when Node
-        node.previous_element_sibling?
-      end
-    end
-
-    def content : String
-      String.build { |str| content(str) }
-    end
-
-    protected def content(str : String::Builder) : Nil
-      @children.each { |node| node.content(str) }
-    end
-
-    # Removes *node* from any tree it currently is in, then appends it to child
-    # nodes.
-    def append(node : Node) : Nil
-      node.relink(self, @children.tail, nil)
-
-      if tail = @children.tail
-        tail.next_sibling = node
-        @children.tail = node
-      else
-        @children.head = node
-        @children.tail = node
-      end
-    end
-
-    # Removes *node* from any child nodes it currently resides in, then inserts
-    # it to the child nodes of this element, just before the *before* child
-    # node.
-    #
-    # Raises if *before* isn't in this element child nodes.
-    def insert(node : Node, *, before : Node) : Nil
-      raise DOMError.new("not a child of node") unless before.parent_node?.try(&.same?(self))
-
-      node.relink(self, before.previous_sibling?, before)
-
-      if n = before.previous_sibling?
-        n.next_sibling = node
-      else
-        @children.head = node
-      end
-      before.previous_sibling = node
-    end
-
-    # Removes *node* from any child nodes it currently resides in, then inserts
-    # it to the child nodes of this element, just after the *after* child node.
-    #
-    # Raises if *after* isn't in this element child nodes.
-    def insert(node : Node, *, after : Node?) : Nil
-      raise DOMError.new("not a child of node") unless after.parent_node?.try(&.same?(self))
-
-      node.relink(self, after, after.next_sibling?)
-
-      if n = after.next_sibling?
-        n.previous_sibling = node
-      else
-        @children.tail = node
-      end
-      after.next_sibling = node
-    end
-
-    # Removes *node* from child nodes.
-    #
-    # Raises if *node* isn't in this element child nodes.
-    def remove_child(node : Node) : Nil
-      raise DOMError.new("not a child of node") unless node.parent_node?.try(&.same?(self))
-
-      unlink_child(node)
-      node.unlink_siblings
-      node.link(nil, nil, nil)
-    end
-
     protected def unlink_child(node : Node) : Nil
       if @children.head.same?(node)
         @children.head = node.next_sibling?
       end
-
       if @children.tail.same?(node)
         @children.tail = node.previous_sibling?
       end
-    end
-
-    def to_xml(io : IO) : Nil
-      io << '<' << @name << '>'
-      @children.each { |node| node.to_xml(io) }
-      io << '<' << '/' << @name << '>'
-    end
-  end
-
-  class Text < Node
-    property content : String
-
-    def initialize(@content)
-    end
-
-    protected def content(str : String::Builder) : Nil
-      str << @content
-    end
-
-    # FIXME: escape @content
-    def to_xml(io : IO) : Nil
-      io << @content
     end
   end
 end

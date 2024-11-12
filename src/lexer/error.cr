@@ -1,20 +1,20 @@
 require "./location"
 
 module CRXML
-  class Lexer
-    abstract class Error < Exception
-      def initialize(@message : String, @location : Lexer::Location)
-      end
+  abstract class Error < Exception
+    getter location : Lexer::Location
 
-      def message : String
-        "#{@message} at line #{@location.line} column #{@location.column}"
-      end
+    def initialize(@message : String, @location : Lexer::Location)
     end
 
-    class SyntaxError < Error
+    def message : String
+      "#{@message} at line #{@location.line} column #{@location.column}"
     end
+  end
 
-    class ValidationError < Error
-    end
+  class SyntaxError < Error
+  end
+
+  class ValidationError < Error
   end
 end

@@ -31,6 +31,20 @@ module CRXML
       end
     end
 
+    struct SDoctype < Token
+      getter name : String
+      getter public_id : String?
+      getter system_id : String?
+
+      def initialize(@name, @public_id, @system_id, @start_location, @end_location)
+      end
+    end
+
+    struct EDoctype < Token
+      def initialize(@start_location, @end_location)
+      end
+    end
+
     struct Attribute < Token
       getter name : String
       getter value : String
