@@ -79,5 +79,57 @@ module CRXML
       def initialize(@name, @content, @start_location, @end_location)
       end
     end
+
+    struct PE < Token
+      getter name : String
+      getter value : String
+
+      def initialize(@name, @value, @start_location, @end_location)
+      end
+    end
+
+    struct ExternalPE < Token
+      getter name : String
+      getter public_id : String?
+      getter system_id : String?
+      getter notation : String?
+
+      def initialize(@name, @public_id, @system_id, @notation, @start_location, @end_location)
+      end
+
+      def parsed? : Bool
+        @notation.nil?
+      end
+
+      def unparsed? : Bool
+        !parsed?
+      end
+    end
+
+    struct Entity < Token
+      getter name : String
+      getter value : String
+
+      def initialize(@name, @value, @start_location, @end_location)
+      end
+    end
+
+    struct ExternalEntity < Token
+      getter name : String
+      getter public_id : String?
+      getter system_id : String?
+      getter notation : String?
+
+      def initialize(@name, @public_id, @system_id, @notation, @start_location, @end_location)
+      end
+
+      def parsed? : Bool
+        @notation.nil?
+      end
+
+      def unparsed? : Bool
+        !parsed?
+      end
+    end
   end
 end

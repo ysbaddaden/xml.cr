@@ -19,6 +19,11 @@ module CRXML
     protected def text_content(str : String::Builder) : Nil
       str << @data
     end
+
+    def inspect(io : IO, indent = 0) : Nil
+      indent.times { io << ' ' }
+      io << '#' << self.class.name << " data=" << data.inspect << '\n'
+    end
   end
 
   class Text < CharacterData
@@ -31,6 +36,11 @@ module CRXML
     getter name : String
 
     def initialize(@name : String, @data : String, @owner_document : Document)
+    end
+
+    def inspect(io : IO, indent = 0) : Nil
+      indent.times { io << ' ' }
+      io << '#' << self.class.name << " name=" << name << " data=" << data.inspect << '\n'
     end
   end
 

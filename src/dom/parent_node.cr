@@ -1,5 +1,3 @@
-# require "./children"
-
 module CRXML::DOM::ParentNode
   getter children : Children = Children.new
 
@@ -42,6 +40,16 @@ module CRXML::DOM::ParentNode
   end
 
   # def child_element_count : Int32
+
+  def each_element_child(& : Element ->) : Nil
+    if child = first_element_child?
+      yield child
+
+      while child = child.next_element_sibling?
+        yield child
+      end
+    end
+  end
 
   # def prepend(*nodes : Node) : Nil
   # def append(*nodes : Node) : Nil

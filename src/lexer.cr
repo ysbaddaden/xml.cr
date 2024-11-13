@@ -2,6 +2,7 @@ require "io/memory"
 require "string_pool"
 require "./lexer/error"
 require "./lexer/ast"
+require "./lexer/entities"
 
 module CRXML
   @[Flags]
@@ -19,11 +20,15 @@ module CRXML
   #
   # TODO: option to skip comments.
   # TODO: avoid IO#seek (not widely available, trashes buffer).
+  #
+  # FIXME: (hexa)decimal char refs must be decoded as soon as they are parsed
+  # (e.g. in text or entitydecl value), but entity refs shall only be normalized
+  # when processed as text.
   class Lexer
     PREDEFINED_ENTITIES = {
-      "lt" => '<',
-      "gt" => '>',
-      "amp" => '&',
+      "lt"   => '<',
+      "gt"   => '>',
+      "amp"  => '&',
       "apos" => '\'',
       "quot" => '"',
     }
@@ -33,28 +38,46 @@ module CRXML
     end
 
     @io : IO
-    # @input : String?
-    # @input_index : Int32?
+    @replacement_texts : Array({IO, Char?, Char?})
     @current_char : Char?
     @peek_char : Char?
-    # @saved_peek_char : Char?
     getter validate : Validation
 
     # TODO: option to skip over comments (don't allocate as strings)
-    def initialize(@io : IO, @validate : Validation = :none)
+    def initialize(@io : IO, @validate : Validation = :none, @include_external_entities = false, @include_path : String? = nil)
       @buf = IO::Memory.new
       @pool = StringPool.new
       @location = Location.new(1, 0)
+      @replacement_texts = Array({IO, Char?, Char?}).new
       detect_encoding
       next_char
+    end
+
+    private def include_path
+      @include_path ||=
+        if (io = @io).responds_to?(:path)
+          File.expand_path(File.dirname(io.path))
+        end
     end
 
     private def entities
       @entities ||= Hash(String, String).new
     end
 
+    private def external_entities
+      @external_entities ||= Hash(String, String).new
+    end
+
     private def parameter_entities
       @parameter_entities ||= Hash(String, String).new
+    end
+
+    private def external_parameter_entities
+      @external_parameter_entities ||= Hash(String, String).new
+    end
+
+    def set_encoding(encoding : String) : Nil
+      @io.set_encoding(encoding)
     end
 
     private def detect_encoding
@@ -70,12 +93,12 @@ module CRXML
       when UInt8.static_array(0xFF, 0xFE, 0x00, 0x00)
         @io.set_encoding("UCS-4LE")
         return
-      #when UInt8.static_array(0x00, 0x00, 0xFF, 0xFE)
+        # when UInt8.static_array(0x00, 0x00, 0xFF, 0xFE)
         #  @io.set_encoding("UCS-4" # unusual octet order (2143) unsupported?
-        #return
-      #when UInt8.static_array(0xFE, 0xFF, 0x00, 0x00)
+        # return
+        # when UInt8.static_array(0xFE, 0xFF, 0x00, 0x00)
         #  @io.set_encoding("UCS-4" # unusual octet order (3412) unsupported?
-        #return
+        # return
       end
 
       case bytes.to_slice[0, 2]
@@ -102,17 +125,17 @@ module CRXML
         @io.set_encoding("UCS-4BE")
       when UInt8.static_array(0x3C, 0x00, 0x00, 0x00)
         @io.set_encoding("UCS-4LE")
-      #when UInt8.static_array(0x00, 0x00, 0x3C, 0x00)
-      #  @io.set_encoding("UCS-4") # unusual octet order (2143) unsupported?
-      #when UInt8.static_array(0x00, 0x3C, 0x00, 0x00)
-      #  @io.set_encoding("UCS-4") # unusual octet order (3412) unsupported?
+        # when UInt8.static_array(0x00, 0x00, 0x3C, 0x00)
+        #  @io.set_encoding("UCS-4") # unusual octet order (2143) unsupported?
+        # when UInt8.static_array(0x00, 0x3C, 0x00, 0x00)
+        #  @io.set_encoding("UCS-4") # unusual octet order (3412) unsupported?
       when UInt8.static_array(0x00, 0x3C, 0x00, 0x3F)
         @io.set_encoding("UTF-16BE")
       when UInt8.static_array(0x3C, 0x00, 0x3F, 0x00)
         @io.set_encoding("UTF-16LE")
       when UInt8.static_array(0x3C, 0x3F, 0x78, 0x6D)
         # ASCII, ISO 646, UTF-8: we can keep reading with the default UTF-8
-      #when UInt8.static_array(0x4C, 0x6F, 0xA7, 0x94)
+        # when UInt8.static_array(0x4C, 0x6F, 0xA7, 0x94)
         # EBCDIC: unsupported?
       end
 
@@ -201,6 +224,7 @@ module CRXML
 
                 loop do
                   skip_s
+                  start_location = @location
 
                   case expect(']', '<', '%')
                   when ']'
@@ -233,26 +257,32 @@ module CRXML
                           if current_char == 'S' || current_char == 'P'
                             if expect("SYSTEM", "PUBLIC") == "PUBLIC"
                               skip_s
-                              pubid = lex_pubid_literal
+                              public_id = lex_pubid_literal
                             end
                             skip_s
-                            external = lex_system_literal
+                            system_id = lex_system_literal
                             skip_s
                             if current_char == 'N'
                               expect("NDATA")
                               skip_s
                               notation = lex_name
                             end
-                            # todo: external: deal with it
-                            # todo: yield token (?)
+
+                            if pe
+                              self.external_parameter_entities[name] ||= system_id if @include_external_entities
+                              yield ExternalPE.new(name, public_id, system_id, notation, start_location, @location)
+                            else
+                              self.external_entities[name] ||= system_id if @include_external_entities
+                              yield ExternalEntity.new(name, public_id, system_id, notation, start_location, @location)
+                            end
                           else
                             value = lex_entity_value
                             if pe
-                              self.parameter_entities[name] = value
-                              # todo: yield PE token (?)
+                              self.parameter_entities[name] ||= value
+                              yield PE.new(name, value, start_location, @location)
                             else
-                              self.entities[name] = value
-                              # todo: yield Entity token (?)
+                              self.entities[name] ||= value
+                              yield Entity.new(name, value, start_location, @location)
                             end
                           end
 
@@ -261,7 +291,6 @@ module CRXML
                         else
                           # todo: elementdecl
                           # todo: AttlistDecl
-                          # todo: EntityDecl
                           # todo: NotationDecl
                           until next_char == '>'
                             # ignore for now
@@ -273,8 +302,18 @@ module CRXML
                   when '%'
                     name = lex_name
                     expect(';')
-                    # TODO: process PEReference as the current input!
-                    # self.input = parameter_entities[name]
+                    if pe = @parameter_entities.try(&.fetch(name) { nil })
+                      replacement_text IO::Memory.new(pe)
+                    end
+                    if system_id = @external_parameter_entities.try(&.fetch(name) { nil })
+                      if include_path = self.include_path
+                        path = File.expand_path(File.join(include_path, system_id))
+                        if path.starts_with?(include_path) && File.exists?(path)
+                          replacement_text File.new(path)
+                          return
+                        end
+                      end
+                    end
                   end
                 end
 
@@ -460,10 +499,7 @@ module CRXML
 
       String.build do |str|
         until (char = current_char) == quote
-          normalize_to(str, char,
-                       normalize_s: true,
-                       include_pe: true,
-                       process_entity: true)
+          normalize_to(str, char, normalize_s: true, include_pe: true)
         end
         next_char
       end
@@ -474,7 +510,7 @@ module CRXML
     private def lex_attvalue(quote)
       String.build do |str|
         until (char = current_char) == quote
-          normalize_to(str, char, normalize_s: true)
+          normalize_to(str, char, normalize_s: true, include_entity: true)
         end
         next_char
       end
@@ -511,7 +547,7 @@ module CRXML
     private def lex_text
       String.build do |str|
         while (char = @current_char) && char != '<'
-          normalize_to(str, char, process_entity: true)
+          normalize_to(str, char, include_entity: true, process_entity: true)
         end
       end
     end
@@ -608,11 +644,13 @@ module CRXML
     # https://www.w3.org/TR/xml11/#AVNormalize
     # https://www.w3.org/TR/xml11/#entproc
     #
-    # - +include_pe+: set to true to recognize and include parameter entities (e.g. ENTITY);
+    # - +include_pe+: set to true to recognize and include parameter entities (e.g. ENTITY %);
+    # - +include_entity+: set to true to recognize and include entities (e.g. ENTITY);
     # - +normalize_s+: set to true to replace whitespaces with a single space (e.g. ATTVALUE);
     # - +merge_s+: set to true to group whitespaces (e.g. NMTOKENS);
     # - +process_entity+: set to true to process the replacement text of entities (e.g. CONTENT).
-    private def normalize_to(str, char, include_pe = false, normalize_s = false, merge_s = false, process_entity = false)
+    #
+    private def normalize_to(str, char, include_pe = false, include_entity = false, normalize_s = false, merge_s = false, process_entity = false)
       if char == '&'
         if next_char == '#'
           if next_char == 'x'
@@ -621,8 +659,10 @@ module CRXML
           else
             normalize_decimal_char_ref(str)
           end
-        else
+        elsif include_entity
           normalize_entity_ref(str, process_entity)
+        else
+          str << '&'
         end
       elsif include_pe && char == '%'
         normalize_pe_reference(str)
@@ -700,8 +740,7 @@ module CRXML
       @buf.clear
     end
 
-    # FIXME: the replacement text must be treated as the actual input when
-    # +process_entity+ is true!
+    # FIXME: unknown, well formed, entities should yield an EntityRef token.
     private def normalize_entity_ref(str, process_entity = false)
       name = lex_name
 
@@ -714,21 +753,31 @@ module CRXML
         end
 
         if value = @entities.try(&.fetch(name) { nil })
-          # if process_entity
-          #   self.input = value
-          # else
+          if process_entity
+            replacement_text IO::Memory.new(value)
+          else
             str << value
-          # end
+          end
           return
         end
 
-        if @validate.well_formed?
-          raise ValidationError.new("Unknown entity", @location.adjust(column: -2 - name.size))
+        if process_entity && (system_id = @external_entities.try(&.fetch(name) { nil }))
+          if include_path = self.include_path
+            path = File.expand_path(File.join(include_path, system_id))
+            if path.starts_with?(include_path) && File.exists?(path)
+              replacement_text File.new(path)
+              return
+            end
+          end
         end
 
+        # if @validate.well_formed?
+        #  raise ValidationError.new("Unknown entity", @location.adjust(column: -2 - name.size))
+        # end
+
         str << '&' << name << ';'
-      elsif @validate.well_formed?
-        expect(';')
+        # elsif @validate.well_formed?
+        #  expect(';')
       else
         str << '&' << name
       end
@@ -744,6 +793,16 @@ module CRXML
           str << value
           return
         end
+
+        # if system_id = @external_parameter_entities.try(&.fetch(name) { nil })
+        #   if include_path = self.include_path
+        #     path = File.expand_path(File.join(include_path, system_id))
+        #     if path.starts_with?(include_path) && File.exists?(path)
+        #       replacement_text File.new(path)
+        #       return
+        #     end
+        #   end
+        # end
 
         if @validate.well_formed?
           raise ValidationError.new("Unknown parameter entity", @location.adjust(column: -2 - name.size))
@@ -771,45 +830,60 @@ module CRXML
     end
 
     private def peek_char : Char
-      @peek_char ||= @io.read_char || raise SyntaxError.new("Reached end-of-file", @location)
+      peek_char = nil
+
+      while replacement = @replacement_texts.last?
+        if peek_char = replacement[0].read_char
+          break
+        else
+          @current_char = replacement[1]
+          peek_char = replacement[2]
+          @replacement_texts.pop
+          replacement[0].close if replacement[0].is_a?(File)
+        end
+      end
+
+      peek_char ||= @io.read_char
+
+      @peek_char = peek_char || raise SyntaxError.new("Reached end-of-file", @location)
     end
 
     private def current_char : Char
       @current_char || raise SyntaxError.new("Reached end-of-file", @location)
     end
 
-    # TODO: process @input when present
     private def next_char : Char?
-      current_char =
-        if char = @peek_char
-          @peek_char = nil
-          char
-        # elsif input = @input
-        #   if (index = @input_index += 1) == @input.size
-        #     input, input_index = nil, 0
-        #     peek_char, @saved_peek_char = @saved_peek_char, nil
-        #     peek_char || @io.read_char
-        #   else
-        #     input[index]
-        #   end
-        else
-          @io.read_char
+      current_char = nil
+
+      if current_char = @peek_char
+        @peek_char = nil
+      else
+        while replacement = @replacement_texts.last?
+          if current_char = replacement[0].read_char
+            break
+          else
+            current_char = replacement[1]
+            @peek_char = replacement[2]
+            @replacement_texts.pop
+            replacement[0].close if replacement[0].is_a?(File)
+          end
         end
+      end
+
+      current_char ||= @io.read_char
 
       if current_char = normalize_line_endings(current_char)
-        @location.update(current_char) # unless @input
+        @location.update(current_char) if @replacement_texts.empty?
       end
 
       @current_char = current_char
     end
 
-    # private def input=(input : String)
-    #   return unless input.empty?
-    #   @input = input
-    #   @input_index = 0
-    #   @current_char = @input[0]
-    #   @saved_peek_char = @peek_char
-    # end
+    private def replacement_text(io : IO)
+      @replacement_texts << {io, @current_char, @peek_char}
+      @peek_char = nil
+      @current_char = io.read_char
+    end
 
     # https://www.w3.org/TR/xml11/#NT-Char
     private def char?(char)
@@ -915,6 +989,5 @@ module CRXML
         '\n',
       ].any? { |c| c === char }
     end
-
   end
 end

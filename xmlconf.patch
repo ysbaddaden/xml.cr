@@ -1,0 +1,24 @@
+diff -ru xmlconf.orig/eduni/xmlconf.xml xmlconf/eduni/xmlconf.xml
+--- xmlconf.orig/eduni/xmlconf.xml	2024-11-13 16:06:07.803959004 +0100
++++ xmlconf/eduni/xmlconf.xml	2024-11-13 16:06:12.711119238 +0100
+@@ -30,7 +30,7 @@
+ <TESTCASES xml:base="namespaces/errata-1e/">
+     &eduni-nse;
+ </TESTCASES>
+-<TESTCASES xml:base="namespaces/misc/">
++<TESTCASES xml:base="misc/">
+     &eduni-misc;
+ </TESTCASES>
+
+diff -ru xmlconf.orig/xmlconf.xml xmlconf/xmlconf.xml
+--- xmlconf.orig/xmlconf.xml	2024-11-13 16:06:07.805959069 +0100
++++ xmlconf/xmlconf.xml	2024-11-13 16:10:24.685167191 +0100
+@@ -95,7 +95,7 @@
+ <TESTCASES xml:base="eduni/namespaces/errata-1e/">
+     &eduni-nse;
+ </TESTCASES>
+-<TESTCASES xml:base="eduni/namespaces/misc/">
++<TESTCASES xml:base="eduni/misc/">
+     &eduni-misc;
+ </TESTCASES>
+ 

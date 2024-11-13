@@ -30,5 +30,11 @@ module CRXML
 
     # def get_elements_by(name : String) : Array(Element)
     # def get_elements_by(class : String) : Array(Element)
+
+    def inspect(io : IO, indent = 0) : Nil
+      indent.times { io << ' ' }
+      io << '#' << self.class.name << " name=" << name << '\n'
+      each_child { |child| child.inspect(io, indent + 2) }
+    end
   end
 end

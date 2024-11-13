@@ -56,6 +56,16 @@ module CRXML
       @children.tail || yield
     end
 
+    def each_child(& : Node ->) : Nil
+      if child = first_child?
+        yield child
+
+        while child = child.next_sibling?
+          yield child
+        end
+      end
+    end
+
     # def node_value : String?
     #   nil
     # end
@@ -73,6 +83,7 @@ module CRXML
     # end
 
     # def ==(other : Node) : Bool
+    #   return true if same?(other)
     # end
 
     # @[Flags]
@@ -177,6 +188,12 @@ module CRXML
       if @children.tail.same?(node)
         @children.tail = node.previous_sibling?
       end
+    end
+
+    def inspect(io : IO, indent = 0) : Nil
+      indent.times { io << ' ' }
+      io << '#' << self.class.name << '\n'
+      # each_child { |child| child.inspect(io, indent + 2) }
     end
   end
 end

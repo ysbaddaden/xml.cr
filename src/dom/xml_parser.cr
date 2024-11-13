@@ -23,7 +23,7 @@ module CRXML::DOM
           when "version"
             @document.version = tok.value
           when "encoding"
-            # todo: set the IO encoding!
+            @lexer.set_encoding(tok.value)
             @document.encoding = tok.value
           when "standalone"
             @document.standalone = tok.value
@@ -44,10 +44,7 @@ module CRXML::DOM
       @lexer.tokenize_prolog do |tok|
         case tok
         when Lexer::SDoctype
-          doctype = @document.doctype = DocumentType.new(tok.name,
-                                                         tok.public_id || "",
-                                                         tok.system_id || "",
-                                                         @document)
+          doctype = @document.doctype = DocumentType.new(tok.name, tok.public_id || "", tok.system_id || "", @document)
         when Lexer::EDoctype
           doctype = nil
         when Lexer::STag
@@ -59,16 +56,27 @@ module CRXML::DOM
           break
         when Lexer::PI
           if doctype
-            # doctype.append(ProcessingInstruction.new(tok.name, tok.content, @document))
+            doctype.append(ProcessingInstruction.new(tok.name, tok.content, @document))
           else
             @document.append(ProcessingInstruction.new(tok.name, tok.content, @document))
           end
         when Lexer::Comment
-          @document.append(Comment.new(tok.content, @document))
-        # when Lexer::AttList
-        # when Lexer::Entity
-        # when Lexer::Element
-        # when Lexer::Notation
+          if doctype
+            doctype.append(Comment.new(tok.content, @document))
+          else
+            @document.append(Comment.new(tok.content, @document))
+          end
+        when Lexer::PE
+          doctype.append(Entity.new(true, tok.name, tok.value, nil, nil, nil)) if doctype
+        when Lexer::ExternalPE
+          doctype.append(Entity.new(true, tok.name, nil, tok.public_id, tok.system_id, tok.notation)) if doctype
+        when Lexer::Entity
+          doctype.append(Entity.new(false, tok.name, tok.value, nil, nil, nil)) if doctype
+        when Lexer::ExternalEntity
+          doctype.append(Entity.new(false, tok.name, nil, tok.public_id, tok.system_id, tok.notation)) if doctype
+          # when Lexer::AttList
+          # when Lexer::Element
+          # when Lexer::Notation
         else
           raise "BUG: unexpected #{tok}"
         end

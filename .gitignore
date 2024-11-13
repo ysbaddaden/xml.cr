@@ -1,1 +1,3 @@
 /lib
+/xmlconf
+/spec/xmlconf_spec.cr
