@@ -6,7 +6,7 @@ require "./lexer/entities"
 
 module CRXML
   @[Flags]
-  enum Validation
+  enum Options
     WellFormed
   end
 
@@ -41,10 +41,10 @@ module CRXML
     @replacement_texts : Array({IO, Char?, Char?})
     @current_char : Char?
     @peek_char : Char?
-    getter validate : Validation
+    getter options : Options
 
     # TODO: option to skip over comments (don't allocate as strings)
-    def initialize(@io : IO, @validate : Validation = :none, @include_external_entities = false, @include_path : String? = nil)
+    def initialize(@io : IO, @options : Options = :none, @include_external_entities = false, @include_path : String? = nil)
       @buf = IO::Memory.new
       @pool = StringPool.new
       @location = Location.new(1, 0)
@@ -302,6 +302,8 @@ module CRXML
                   when '%'
                     name = lex_name
                     expect(';')
+
+                    # FIXME: prevent entity recursion (e1 => e2 => e1 => ...)
                     if pe = @parameter_entities.try(&.fetch(name) { nil })
                       replacement_text IO::Memory.new(pe)
                     end
@@ -489,6 +491,8 @@ module CRXML
         # '/>', '?>', '"' or '\'')
         quote = expect('\'', '"')
         value = lex_attvalue(quote)
+      elsif @options.well_formed?
+        raise SyntaxError.new("Attribute must have a value", @location)
       end
 
       {name, value || ""}
@@ -510,6 +514,10 @@ module CRXML
     private def lex_attvalue(quote)
       String.build do |str|
         until (char = current_char) == quote
+          if char == '<' && @options.well_formed?
+            next_char
+            raise SyntaxError.new("Attribute value cannot contain a literal '<'", @location)
+          end
           normalize_to(str, char, normalize_s: true, include_entity: true)
         end
         next_char
@@ -533,7 +541,7 @@ module CRXML
 
       String.build do |str|
         until (char = current_char) == quote
-          if !@validate.well_formed? || pubid_char?(char)
+          if !@options.well_formed? || pubid_char?(char)
             str << char
             next_char
           else
@@ -547,6 +555,18 @@ module CRXML
     private def lex_text
       String.build do |str|
         while (char = @current_char) && char != '<'
+          if @options.well_formed?
+            if char == ']'
+              if next_char == ']' && peek_char == '>'
+                raise SyntaxError.new("Text content may not contain a literal ']]>' sequence", @location)
+              end
+              str << ']'
+              next
+            end
+            # if !char?(char) || restricted_char?(char)
+            #   raise SyntaxError.new("Invalid Char #{char.inspect}", @location)
+            # end
+          end
           normalize_to(str, char, include_entity: true, process_entity: true)
         end
       end
@@ -557,18 +577,19 @@ module CRXML
         loop do
           if current_char == '-'
             if next_char == '-'
-              if next_char == '>'
-                next_char
+              if peek_char == '>'
+                next_char # -
+                next_char # >
                 break
-              elsif @validate.well_formed?
-                raise ValidationError.new("'--' can't appear inside comments", @location.adjust(column: -2))
+              elsif @options.well_formed?
+                raise ValidationError.new("Double hyphen within comment", @location.adjust(column: -2))
               end
               str << '-'
             end
             str << '-'
           end
 
-          if @validate.well_formed? && !char?(current_char)
+          if @options.well_formed? && !char?(current_char)
             raise ValidationError.new("Invalid XML char #{current_char.inspect}", @location)
           end
 
@@ -591,9 +612,9 @@ module CRXML
             end
             str << ']'
           else
-            # if @validate.well_formed? && !char?(current_char)
-            #   raise ValidationError.new("Invalid XML char #{current_char.inspect}", @location)
-            # end
+            if @options.well_formed? && !char?(current_char)
+              raise ValidationError.new("Invalid XML char #{current_char.inspect}", @location)
+            end
             str << current_char
             next_char
           end
@@ -700,7 +721,7 @@ module CRXML
         @buf << char
       end
 
-      if @validate.well_formed?
+      if @options.well_formed?
         raise ValidationError.new("Invalid CharRef", @location.adjust(column: -i - 3))
       end
 
@@ -730,8 +751,8 @@ module CRXML
         @buf << char
       end
 
-      if @validate.well_formed?
-        raise ValidationError.new("Invalid CharRef", @location.adjust(-i - 2))
+      if @options.well_formed?
+        raise ValidationError.new("Invalid CharRef", @location.adjust(column: -i - 2))
       end
 
       str << '&' << '#'
@@ -740,7 +761,8 @@ module CRXML
       @buf.clear
     end
 
-    # FIXME: unknown, well formed, entities should yield an EntityRef token.
+    # FIXME: prevent entity recursion (e1 => e2 => e1 => ...)
+    # TODO: unknown, well formed, entities should yield an EntityRef token.
     private def normalize_entity_ref(str, process_entity = false)
       name = lex_name
 
@@ -771,18 +793,19 @@ module CRXML
           end
         end
 
-        # if @validate.well_formed?
-        #  raise ValidationError.new("Unknown entity", @location.adjust(column: -2 - name.size))
-        # end
+        if @options.well_formed?
+         raise ValidationError.new("Unknown entity", @location.adjust(column: -2 - name.size))
+        end
 
         str << '&' << name << ';'
-        # elsif @validate.well_formed?
-        #  expect(';')
+      elsif @options.well_formed?
+        expect(';')
       else
         str << '&' << name
       end
     end
 
+    # FIXME: prevent entity recursion (e1 => e2 => e1 => ...)
     private def normalize_pe_reference(str)
       name = lex_name
 
@@ -804,12 +827,12 @@ module CRXML
         #   end
         # end
 
-        if @validate.well_formed?
+        if @options.well_formed?
           raise ValidationError.new("Unknown parameter entity", @location.adjust(column: -2 - name.size))
         end
 
         str << '%' << name << ';'
-      elsif @validate.well_formed?
+      elsif @options.well_formed?
         expect(';')
       else
         str << '%' << name
@@ -845,7 +868,11 @@ module CRXML
 
       peek_char ||= @io.read_char
 
-      @peek_char = peek_char || raise SyntaxError.new("Reached end-of-file", @location)
+      if peek_char
+        validate_char(@peek_char = peek_char)
+      else
+        raise SyntaxError.new("Reached end-of-file", @location)
+      end
     end
 
     private def current_char : Char
@@ -876,13 +903,20 @@ module CRXML
         @location.update(current_char) if @replacement_texts.empty?
       end
 
-      @current_char = current_char
+      validate_char(@current_char = current_char)
     end
 
     private def replacement_text(io : IO)
       @replacement_texts << {io, @current_char, @peek_char}
       @peek_char = nil
-      @current_char = io.read_char
+      validate_char(@current_char = io.read_char)
+    end
+
+    private def validate_char(char)
+      if char && restricted_char?(char)
+        raise SyntaxError.new("Invalid Char #{char.inspect}", @location)
+      end
+      char
     end
 
     # https://www.w3.org/TR/xml11/#NT-Char

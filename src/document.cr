@@ -43,7 +43,9 @@ module CRXML
     def inspect(io : IO, indent = 0) : Nil
       indent.times { io << ' ' }
       io << '#' << self.class.name << '\n'
-      doctype.inspect(io, indent + 2)
+      if node = doctype?
+        node.inspect(io, indent + 2)
+      end
       each_child { |child| child.inspect(io, indent + 2) }
       root.inspect(io, indent + 2)
     end
