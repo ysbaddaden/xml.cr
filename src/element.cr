@@ -31,6 +31,40 @@ module CRXML
     # def get_elements_by(name : String) : Array(Element)
     # def get_elements_by(class : String) : Array(Element)
 
+    def ==(other : Element) : Bool
+      return true if same?(other)
+      return true if @name == other.name
+
+      # compare attributes (move to Attributes#== ?)
+      a_count = @attributes.try(&.size) || 0
+      b_count = other.@attributes.try(&.size) || 0
+      return false unless a_count == b_count
+
+      unless a_count == 0
+        attributes.each do |attr|
+          return false unless other_attr = other.attributes[attr.name]?
+          return false unless attr.value == other_attr.value
+        end
+      end
+
+      # compare sub-trees
+      a_count = @children.size
+      b_count = other.@children.size
+      return false unless a_count == b_count
+
+      unless a_count == 0
+        a = first_child
+        b = other.first_child
+        return false unless a == b
+
+        while (a = a.next_sibling?) && (b.next_sibling?)
+          return false unless a == b
+        end
+      end
+
+      true
+    end
+
     def inspect(io : IO, indent = 0) : Nil
       indent.times { io << ' ' }
       io << '#' << self.class.name << " name=" << name << '\n'

@@ -16,6 +16,10 @@ module CRXML
       @data
     end
 
+    def ==(other : CharacterData) : Bool
+      @data == other.data
+    end
+
     protected def text_content(str : String::Builder) : Nil
       str << @data
     end
@@ -27,15 +31,25 @@ module CRXML
   end
 
   class Text < CharacterData
+    def ==(other : Text) : Bool
+      @data == other.data
+    end
   end
 
   class CDataSection < CharacterData
+    def ==(other : CDataSection) : Bool
+      @data == other.data
+    end
   end
 
   class ProcessingInstruction < CharacterData
     getter name : String
 
     def initialize(@name : String, @data : String, @owner_document : Document)
+    end
+
+    def ==(other : ProcessingInstruction) : Bool
+      @name == other.name && @data == other.data
     end
 
     def inspect(io : IO, indent = 0) : Nil
@@ -50,6 +64,10 @@ module CRXML
 
     protected def text_content(str : String::Builder) : Nil
       # do nothing
+    end
+
+    def ==(other : Comment) : Bool
+      @data == other.data
     end
   end
 end

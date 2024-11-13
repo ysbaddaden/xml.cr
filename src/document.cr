@@ -36,6 +36,10 @@ module CRXML
     # def get_elements_by(name : String) : Array(Element)
     # def get_elements_by(class : String) : Array(Element)
 
+    def ==(other : Document) : Bool
+      same?(other) || root == other.root
+    end
+
     def inspect(io : IO, indent = 0) : Nil
       indent.times { io << ' ' }
       io << '#' << self.class.name << '\n'

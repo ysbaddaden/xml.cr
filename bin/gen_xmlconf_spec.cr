@@ -4,27 +4,26 @@ def gen_testcase(node, xml_base)
   id = node.attributes["ID"].value
   sections = node.attributes["SECTIONS"].value
   type = node.attributes["TYPE"].value
+
   uri = File.join("xmlconf", xml_base.to_s, node.attributes["URI"].value)
 
   if attr = node.attributes["OUTPUT"]?
-    output = File.join(xml_base.to_s, attr.value)
+    output = File.join("xmlconf", xml_base.to_s, attr.value)
   end
 
   puts %(it "#{id} (Section #{sections})" do)
-  puts %(  File.open(#{uri.inspect}) do |file|)
   case type
   when "valid"
-    puts %(    document = CRXML.parse_xml(file))
+    puts %(  document = File.open(#{uri.inspect}) { |file| CRXML.parse_xml(file) })
     if output
-      puts %(    # TODO: parse output (normalized))
-      puts %(    # TODO: validate parsed == output)
+      puts %(  canon = File.open(#{output.inspect}) { |file| CRXML.parse_xml(file) })
+      puts %(  assert_equal canon, document)
     end
   when "invalid"
     puts %(    skip)
   when "not-wf"
     puts %(    skip)
   end
-  puts %(  end)
   puts %(end)
   puts
 end

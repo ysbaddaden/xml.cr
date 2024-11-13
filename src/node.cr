@@ -82,9 +82,9 @@ module CRXML
     # def clone_node(deep = false) : Node
     # end
 
-    # def ==(other : Node) : Bool
-    #   return true if same?(other)
-    # end
+    def ==(other : Node) : Bool
+      false
+    end
 
     # @[Flags]
     # enum DocumentPosition
