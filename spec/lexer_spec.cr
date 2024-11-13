@@ -50,7 +50,7 @@ describe CRXML::Lexer do
       assert_tokens [{:comment, " "}], xml: "<!-- -->"
       assert_tokens [{:comment, " - -- "}], xml: "<!-- - -- -->"
       assert_tokens [{:comment, " a comment ->"}], xml: "<!-- a comment ->-->"
-      #assert_tokens [{:comment, "a-"}], xml: "<!--a--->"
+      # assert_tokens [{:comment, "a-"}], xml: "<!--a--->"
       assert_tokens [{:comment, "azerty"}], xml: "<!--azerty-->"
       assert_tokens [{:comment, " declarations for <head> & <body> "}],
         xml: "<!-- declarations for <head> & <body> -->"
