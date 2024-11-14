@@ -859,17 +859,15 @@ module CRXML
         if peek_char = replacement[0].read_char
           break
         else
-          @current_char = replacement[1]
-          peek_char = replacement[2]
-          @replacement_texts.pop
-          replacement[0].close if replacement[0].is_a?(File)
+          @current_char = replacement[2]
+          terminate_replacement(replacement)
         end
       end
 
       peek_char ||= @io.read_char
 
       if peek_char
-        validate_char(@peek_char = peek_char)
+        @peek_char = peek_char
       else
         raise SyntaxError.new("Reached end-of-file", @location)
       end
@@ -903,21 +901,15 @@ module CRXML
         @location.update(current_char) if @replacement_texts.empty?
       end
 
-      validate_char(@current_char = current_char)
+      @current_char = current_char
     end
 
     private def replacement_text(io : IO)
       @replacement_texts << {io, @current_char, @peek_char}
       @peek_char = nil
-      validate_char(@current_char = io.read_char)
+      @current_char = io.read_char
     end
 
-    private def validate_char(char)
-      if char && restricted_char?(char)
-        raise SyntaxError.new("Invalid Char #{char.inspect}", @location)
-      end
-      char
-    end
 
     # https://www.w3.org/TR/xml11/#NT-Char
     private def char?(char)
