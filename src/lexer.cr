@@ -589,7 +589,6 @@ module CRXML
               elsif @options.well_formed?
                 raise ValidationError.new("Double hyphen within comment", @location.adjust(column: -2))
               end
-              str << '-'
             end
             str << '-'
           end
