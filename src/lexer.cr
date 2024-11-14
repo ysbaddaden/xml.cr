@@ -425,7 +425,7 @@ module CRXML
       end
     end
 
-    private def skip_s
+    def skip_s
       while (char = @current_char) && s?(char)
         next_char
       end
@@ -447,6 +447,9 @@ module CRXML
             end
             str << '?'
           else
+            if @options.well_formed? && restricted_char?(current_char)
+              raise SyntaxError.new("Invalid Char in data #{current_char.inspect}", @location)
+            end
             str << current_char
             next_char
           end
@@ -490,7 +493,6 @@ module CRXML
       name = lex_name
       skip_s
 
-      # TODO: well-formed: value is required for XML (with override, e.g. HTML)
       if current_char == '='
         next_char
         skip_s
@@ -511,6 +513,9 @@ module CRXML
 
       String.build do |str|
         until (char = current_char) == quote
+          # if @options.well_formed? && restricted_char?(char)
+          #   raise SyntaxError.new("Invalid Char in data #{char.inspect}", @location)
+          # end
           normalize_to(str, char, normalize_s: true, include_pe: true)
         end
         next_char
@@ -571,6 +576,9 @@ module CRXML
               str << ']'
               next
             end
+            if restricted_char?(char)
+              raise SyntaxError.new("Invalid Char in data #{char.inspect}", @location)
+            end
           end
           normalize_to(str, char, include_entity: true, process_entity: true)
         end
@@ -593,7 +601,7 @@ module CRXML
             str << '-'
           end
 
-          if @options.well_formed? && !char?(current_char)
+          if @options.well_formed? && restricted_char?(current_char)
             raise ValidationError.new("Invalid XML char #{current_char.inspect}", @location)
           end
 

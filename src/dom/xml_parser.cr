@@ -7,9 +7,16 @@ module CRXML::DOM
 
     def initialize(@lexer : Lexer)
       @document = XMLDocument.new
+
       parse_xmldecl
-      parse_prolog
-      parse_logical_structures
+
+      if parse_prolog
+        parse_logical_structures
+      end
+
+      if @lexer.@options.well_formed?
+        ensure_nothing_after_root_element
+      end
     end
 
     # Prolog: XMLDecl
@@ -38,7 +45,7 @@ module CRXML::DOM
     end
 
     # Prolog: Doctype?, Misc* (PI | Comment)
-    private def parse_prolog : Nil
+    private def parse_prolog : Bool
       doctype = nil
 
       @lexer.tokenize_prolog do |tok|
@@ -53,7 +60,7 @@ module CRXML::DOM
           @document.root.attributes[tok.name] = tok.value
         when Lexer::ETag
           # edge case: the root element is an empty element
-          break
+          return false
         when Lexer::PI
           if doctype
             doctype.append(ProcessingInstruction.new(tok.name, tok.content, @document))
@@ -81,6 +88,9 @@ module CRXML::DOM
           raise "BUG: unexpected #{tok}"
         end
       end
+
+      # done: we reached the root element (not empty)
+      true
     end
 
     # Logical Structures (elements)
@@ -104,7 +114,8 @@ module CRXML::DOM
         when Lexer::ETag
           if current_element.name == tok.name
             state.pop?
-            current_element = state.last? || @document.root
+            current_element = state.last?
+            break unless current_element
           else
             # todo: recover (search the state until we find a matching element,
             # ignore etag if not found)
@@ -119,6 +130,13 @@ module CRXML::DOM
         else
           raise "BUG: unexpected #{tok}"
         end
+      end
+    end
+
+    private def ensure_nothing_after_root_element
+      @lexer.skip_s
+      @lexer.tokenize_logical_structures do |tok|
+        raise SyntaxError.new("Unexpected content after root element", tok.start_location)
       end
     end
   end
