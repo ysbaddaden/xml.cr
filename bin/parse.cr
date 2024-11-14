@@ -1,3 +1,4 @@
+#! /usr/bin/env -S crystal i
 require "../src/crxml"
 require "colorize"
 
@@ -63,7 +64,7 @@ ARGV.sort.each do |path|
   rescue ex
     print_parse_error(path, ex)
     puts
-    puts "#{ex.class.name}: #{ex.message}"
+    puts "#{ex.class.name}: #{ex.message}\n#{ex.backtrace.join('\n')}"
     # raise ex
   else
     document.inspect(STDOUT, indent: 0)
