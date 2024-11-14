@@ -38,7 +38,7 @@ module CRXML
     end
 
     @io : IO
-    @replacement_texts : Array({IO, Char?, Char?})
+    @replacement_texts : Array({IO, String, Char?})
     @current_char : Char?
     @peek_char : Char?
     getter options : Options
@@ -48,7 +48,7 @@ module CRXML
       @buf = IO::Memory.new
       @pool = StringPool.new
       @location = Location.new(1, 0)
-      @replacement_texts = Array({IO, Char?, Char?}).new
+      @replacement_texts = Array({IO, String, Char?}).new
       detect_encoding
       next_char
     end
@@ -58,6 +58,10 @@ module CRXML
         if (io = @io).responds_to?(:path)
           File.expand_path(File.dirname(io.path))
         end
+    end
+
+    private def entity_recursion_check
+      @entity_recursion_check ||= Set(String).new
     end
 
     private def entities
@@ -301,20 +305,24 @@ module CRXML
                     end
                   when '%'
                     name = lex_name
-                    expect(';')
 
-                    # FIXME: prevent entity recursion (e1 => e2 => e1 => ...)
+                    # don't consume the current char until we check for recursion, because
+                    # #next_char may terminate the replacement text and remove the entity
+                    # from entity_recursion_check which would fail to detect recursion
+                    expect(';') unless current_char == ';'
+
                     if pe = @parameter_entities.try(&.fetch(name) { nil })
-                      replacement_text IO::Memory.new(pe)
-                    end
-                    if system_id = @external_parameter_entities.try(&.fetch(name) { nil })
-                      if include_path = self.include_path
-                        path = File.expand_path(File.join(include_path, system_id))
-                        if path.starts_with?(include_path) && File.exists?(path)
-                          replacement_text File.new(path)
-                          return
-                        end
+                      replacement_text IO::Memory.new(pe), "pe:#{name}"
+                    elsif (system_id = @external_parameter_entities.try(&.fetch(name) { nil })) && (include_path = self.include_path)
+                      path = File.expand_path(File.join(include_path, system_id))
+                      if path.starts_with?(include_path) && File.exists?(path)
+                        replacement_text File.new(path), "pe:#{name}"
+                        return
+                      else
+                        next_char # ;
                       end
+                    else
+                      next_char # ;
                     end
                   end
                 end
@@ -563,9 +571,6 @@ module CRXML
               str << ']'
               next
             end
-            # if !char?(char) || restricted_char?(char)
-            #   raise SyntaxError.new("Invalid Char #{char.inspect}", @location)
-            # end
           end
           normalize_to(str, char, include_entity: true, process_entity: true)
         end
@@ -688,7 +693,7 @@ module CRXML
       elsif include_pe && char == '%'
         normalize_pe_reference(str)
       elsif s?(char)
-        skip_s if merge_s # e.g. NMTOKENS
+        skip_s if merge_s
         str << (normalize_s ? ' ' : char)
         next_char
       else
@@ -761,23 +766,26 @@ module CRXML
       @buf.clear
     end
 
-    # FIXME: prevent entity recursion (e1 => e2 => e1 => ...)
     # TODO: unknown, well formed, entities should yield an EntityRef token.
     private def normalize_entity_ref(str, process_entity = false)
       name = lex_name
 
       if current_char == ';'
-        next_char
+        # don't consume the current char until we check for recursion, because
+        # #next_char may terminate the replacement text and remove the entity
+        # from entity_recursion_check which would fail to detect recursion
 
         if value = PREDEFINED_ENTITIES[name]?
+          next_char # ;
           str << value
           return
         end
 
         if value = @entities.try(&.fetch(name) { nil })
           if process_entity
-            replacement_text IO::Memory.new(value)
+            replacement_text IO::Memory.new(value), "entity:#{name}"
           else
+            next_char # ;
             str << value
           end
           return
@@ -787,16 +795,17 @@ module CRXML
           if include_path = self.include_path
             path = File.expand_path(File.join(include_path, system_id))
             if path.starts_with?(include_path) && File.exists?(path)
-              replacement_text File.new(path)
+              replacement_text File.new(path), "entity:#{name}"
               return
             end
           end
         end
 
         if @options.well_formed?
-         raise ValidationError.new("Unknown entity", @location.adjust(column: -2 - name.size))
+          raise ValidationError.new("Unknown entity", @location.adjust(column: -1 - name.size))
         end
 
+        next_char # ;
         str << '&' << name << ';'
       elsif @options.well_formed?
         expect(';')
@@ -805,7 +814,6 @@ module CRXML
       end
     end
 
-    # FIXME: prevent entity recursion (e1 => e2 => e1 => ...)
     private def normalize_pe_reference(str)
       name = lex_name
 
@@ -816,16 +824,6 @@ module CRXML
           str << value
           return
         end
-
-        # if system_id = @external_parameter_entities.try(&.fetch(name) { nil })
-        #   if include_path = self.include_path
-        #     path = File.expand_path(File.join(include_path, system_id))
-        #     if path.starts_with?(include_path) && File.exists?(path)
-        #       replacement_text File.new(path)
-        #       return
-        #     end
-        #   end
-        # end
 
         if @options.well_formed?
           raise ValidationError.new("Unknown parameter entity", @location.adjust(column: -2 - name.size))
@@ -887,10 +885,8 @@ module CRXML
           if current_char = replacement[0].read_char
             break
           else
-            current_char = replacement[1]
-            @peek_char = replacement[2]
-            @replacement_texts.pop
-            replacement[0].close if replacement[0].is_a?(File)
+            current_char = replacement[2]
+            terminate_replacement(replacement)
           end
         end
       end
@@ -904,12 +900,42 @@ module CRXML
       @current_char = current_char
     end
 
-    private def replacement_text(io : IO)
-      @replacement_texts << {io, @current_char, @peek_char}
+    private def replacement_text(io : IO, key : String)
+      if entity_recursion_check.includes?(key)
+        raise SyntaxError.new("#{key} directly or indirectly refers to itself", @location)
+      end
+      entity_recursion_check.add(key)
+
+      # now we CAN and MUST consume the ';' but we can't call `#next_char` since
+      # it might terminate the current replacement text which would delete the
+      # current entity from @entity_recursion_check and we'd miss indirect self
+      # references
+      if @peek_char
+        current_char = @peek_char
+        @peek_char = nil
+      elsif replacement = @replacement_texts.last?
+        current_char = replacement[0].read_char
+      else
+        current_char = @io.read_char
+      end
+      if current_char = normalize_line_endings(current_char)
+        @location.update(current_char) if @replacement_texts.empty?
+      end
+
+      # TODO: keep and maintain a location for each replacement (pointing to the
+      # actual place in the XML file, or the external file)
+
+      @replacement_texts << {io, key, current_char}
       @peek_char = nil
       @current_char = io.read_char
     end
 
+    private def terminate_replacement(replacement)
+      entity_recursion_check.delete(replacement[1])
+      @peek_char = nil
+      @replacement_texts.pop
+      replacement[0].close if replacement[0].is_a?(File)
+    end
 
     # https://www.w3.org/TR/xml11/#NT-Char
     private def char?(char)
