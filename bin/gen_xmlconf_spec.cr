@@ -11,19 +11,21 @@ def gen_testcase(node, xml_base)
     output = File.join("xmlconf", xml_base.to_s, attr.value)
   end
 
+  message = node.text_content.gsub(/\s+/, ' ')
+
   puts %(it "#{id} (Section #{sections})" do)
   case type
   when "valid", "invalid"
     puts %(  document = File.open(#{uri.inspect}) { |file| CRXML.parse_xml(file) })
     if output
       puts %(  canon = File.open(#{output.inspect}) { |file| CRXML.parse_xml(file) })
-      puts %(  assert_equal canon, document)
+      puts %(  assert_equal canon, document, #{message.inspect})
     end
   when "not-wf"
     puts %(  skip)
+    # puts %(  assert_raises(CRXML::Error, #{message.inspect}) { File.open(#{uri.inspect}) { |file| CRXML.parse_xml(file) } })
   when "error"
     puts %(  skip)
-    # puts %(  assert_raises(CRXML::Error) { File.open(#{uri.inspect}) { |file| CRXML.parse_xml(file) } })
   end
   puts %(end)
   puts
