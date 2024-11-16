@@ -1,5 +1,9 @@
 module CRXML::DOM::ChildNode
   def before(*nodes : Node) : Nil
+    before(nodes)
+  end
+
+  def before(nodes : Enumerable(Node)) : Nil
     return if nodes.empty?
 
     nodes.each do |node|
@@ -28,11 +32,15 @@ module CRXML::DOM::ChildNode
       n.next_sibling = first
       first.previous_sibling = n
     else
-      @children.head = first
+      parent_node.as(ParentNode).@children.head = first
     end
   end
 
   def after(*nodes : Node) : Nil
+    after(nodes)
+  end
+
+  def after(nodes : Enumerable(Node)) : Nil
     return if nodes.empty?
 
     nodes.each do |node|
@@ -61,7 +69,7 @@ module CRXML::DOM::ChildNode
       n.previous_sibling = last
       last.next_sibling = n
     else
-      @children.tail = last
+      parent_node.as(ParentNode).@children.tail = last
     end
   end
 
