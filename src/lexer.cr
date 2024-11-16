@@ -207,17 +207,17 @@ module CRXML
               yield Comment.new(comment, start_location, @location)
             else
               expect("DOCTYPE")
-              skip_s
+              expect_s
               name = lex_name
               skip_s
               public_id = nil
               system_id = nil
               if current_char == 'S' || current_char == 'P'
                 if expect("SYSTEM", "PUBLIC") == "PUBLIC"
-                  skip_s
+                  expect_s
                   public_id = lex_pubid_literal
                 end
-                skip_s
+                expect_s
                 system_id = lex_system_literal
                 skip_s
               end
@@ -248,28 +248,31 @@ module CRXML
                       else
                         case expect("ELEMENT", "ATTLIST", "ENTITY", "NOTATION")
                         when "ENTITY"
-                          skip_s
+                          expect_s
 
                           if pe = (current_char == '%')
                             next_char
-                            skip_s
+                            expect_s
                           end
 
                           name = lex_name
-                          skip_s
+                          expect_s
 
                           if current_char == 'S' || current_char == 'P'
                             if expect("SYSTEM", "PUBLIC") == "PUBLIC"
-                              skip_s
+                              expect_s
                               public_id = lex_pubid_literal
                             end
-                            skip_s
+                            expect_s
                             system_id = lex_system_literal
-                            skip_s
-                            if current_char == 'N'
-                              expect("NDATA")
-                              skip_s
-                              notation = lex_name
+
+                            unless current_char == '>'
+                              expect_s
+                              if current_char == 'N'
+                                expect("NDATA")
+                                expect_s
+                                notation = lex_name
+                              end
                             end
 
                             if pe
@@ -423,6 +426,13 @@ module CRXML
           yield Attribute.new(name, value, start_location, @location)
         end
       end
+    end
+
+    def expect_s
+      unless s?(@current_char)
+        raise SyntaxError.new("Expected space but got #{@current_char.inspect}", @location)
+      end
+      skip_s
     end
 
     def skip_s
