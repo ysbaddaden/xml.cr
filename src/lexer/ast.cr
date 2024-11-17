@@ -1,4 +1,5 @@
 require "./location"
+require "../dom/att_def"
 
 module CRXML
   class Lexer
@@ -10,10 +11,54 @@ module CRXML
       end
     end
 
-    struct Text < Token
+    struct XMLDecl < Token
+      def initialize(@start_location, @end_location)
+      end
+    end
+
+    struct Doctype < Token
+      getter name : String
+      getter public_id : String?
+      getter system_id : String?
+
+      def initialize(@name, @public_id, @system_id, @start_location, @end_location)
+      end
+    end
+
+    struct AttlistDecl < Token
+      getter name : String
+      getter defs : Array(DOM::AttDef)
+
+      def initialize(@name, @defs, @start_location, @end_location)
+      end
+    end
+
+    struct ElementDecl < Token
+      getter name : String
       getter content : String
 
-      def initialize(@content, @start_location, @end_location)
+      def initialize(@name, @content, @start_location, @end_location)
+      end
+    end
+
+    struct EntityDecl < Token
+      getter parameter : Bool
+      getter name : String
+      getter value : String?
+      getter public_id : String?
+      getter system_id : String?
+      getter notation_id : String?
+
+      def initialize(@parameter, @name, @value, @public_id, @system_id, @notation_id, @start_location, @end_location)
+      end
+    end
+
+    struct NotationDecl < Token
+      getter name : String
+      getter public_id : String?
+      getter system_id : String?
+
+      def initialize(@name, @public_id, @system_id, @start_location, @end_location)
       end
     end
 
@@ -31,104 +76,54 @@ module CRXML
       end
     end
 
-    struct SDoctype < Token
-      getter name : String
-      getter public_id : String?
-      getter system_id : String?
-
-      def initialize(@name, @public_id, @system_id, @start_location, @end_location)
-      end
-    end
-
-    struct EDoctype < Token
-      def initialize(@start_location, @end_location)
-      end
-    end
-
     struct Attribute < Token
       getter name : String
-      getter value : String
+      getter! value : String
 
       def initialize(@name, @value, @start_location, @end_location)
       end
     end
 
-    struct Comment < Token
-      getter content : String
+    struct Text < Token
+      getter data : String
 
-      def initialize(@content, @start_location, @end_location)
+      def initialize(@data, @start_location, @end_location)
+      end
+    end
+
+    struct Comment < Token
+      getter data : String
+
+      def initialize(@data, @start_location, @end_location)
       end
     end
 
     struct CDATA < Token
-      getter content : String
+      getter data : String
 
-      def initialize(@content, @start_location, @end_location)
-      end
-    end
-
-    struct XmlDecl < Token
-      def initialize(@start_location, @end_location)
+      def initialize(@data, @start_location, @end_location)
       end
     end
 
     struct PI < Token
       getter name : String
-      getter content : String
+      getter data : String
 
-      def initialize(@name, @content, @start_location, @end_location)
+      def initialize(@name, @data, @start_location, @end_location)
       end
     end
 
-    struct PE < Token
+    struct EntityRef < Token
       getter name : String
-      getter value : String
 
-      def initialize(@name, @value, @start_location, @end_location)
+      def initialize(@name, @start_location, @end_location)
       end
     end
 
-    struct ExternalPE < Token
+    struct PEReference < Token
       getter name : String
-      getter public_id : String?
-      getter system_id : String?
-      getter notation : String?
 
-      def initialize(@name, @public_id, @system_id, @notation, @start_location, @end_location)
-      end
-
-      def parsed? : Bool
-        @notation.nil?
-      end
-
-      def unparsed? : Bool
-        !parsed?
-      end
-    end
-
-    struct Entity < Token
-      getter name : String
-      getter value : String
-
-      def initialize(@name, @value, @start_location, @end_location)
-      end
-    end
-
-    struct ExternalEntity < Token
-      getter name : String
-      getter public_id : String?
-      getter system_id : String?
-      getter notation : String?
-
-      def initialize(@name, @public_id, @system_id, @notation, @start_location, @end_location)
-      end
-
-      def parsed? : Bool
-        @notation.nil?
-      end
-
-      def unparsed? : Bool
-        !parsed?
+      def initialize(@name, @start_location, @end_location)
       end
     end
   end

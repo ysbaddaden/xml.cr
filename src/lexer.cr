@@ -2,7 +2,7 @@ require "io/memory"
 require "string_pool"
 require "./lexer/error"
 require "./lexer/ast"
-require "./lexer/entities"
+# require "./lexer/entities"
 
 module CRXML
   @[Flags]
@@ -41,6 +41,7 @@ module CRXML
     @replacement_texts : Array({IO, String, Char?})
     @current_char : Char?
     @peek_char : Char?
+    @peek_peek_char : Char?
     getter options : Options
 
     # TODO: option to skip over comments (don't allocate as strings)
@@ -49,9 +50,70 @@ module CRXML
       @pool = StringPool.new
       @location = Location.new(1, 0)
       @replacement_texts = Array({IO, String, Char?}).new
-      detect_encoding
+      autodetect_encoding!
       next_char
     end
+
+    def set_encoding(encoding : String) : Nil
+      @io.set_encoding(encoding)
+    end
+
+    # Attempts to autodetect the file encoding using the Byte Order Mark (BOM)
+    # for unicode (UTF-8, UCS-4LE, UCS-4BE, UTF-16) or using the first few
+    # bytes. Sets the encoding on the IO when an encoding is detected.
+    #
+    # WARNING: requires the IO to support `#seek`!
+    private def autodetect_encoding! : Nil
+      bytes = uninitialized UInt8[4]
+      @io.read_fully?(bytes.to_slice)
+
+      # Byte Order Mark (BOM)
+
+      case bytes
+      when UInt8.static_array(0x00, 0x00, 0xFE, 0xFF)
+        @io.set_encoding("UCS-4BE")
+        return
+      when UInt8.static_array(0xFF, 0xFE, 0x00, 0x00)
+        @io.set_encoding("UCS-4LE")
+        return
+      end
+
+      case bytes.to_slice[0, 2]
+      when UInt8.static_array(0xFE, 0xFF).to_slice
+        @io.seek(2, IO::Seek::Set)
+        @io.set_encoding("UTF-16BE")
+        return
+      when UInt8.static_array(0xFF, 0xFE).to_slice
+        @io.seek(2, IO::Seek::Set)
+        @io.set_encoding("UTF-16LE")
+        return
+      end
+
+      if bytes.to_slice[0, 3] == UInt8.static_array(0xEF, 0xBB, 0xBF).to_slice
+        @io.seek(3, IO::Seek::Set)
+        @io.set_encoding("UTF-8")
+        return
+      end
+
+      # autodetect
+
+      case bytes
+      when UInt8.static_array(0x00, 0x00, 0x00, 0x3C)
+        @io.set_encoding("UCS-4BE")
+      when UInt8.static_array(0x3C, 0x00, 0x00, 0x00)
+        @io.set_encoding("UCS-4LE")
+      when UInt8.static_array(0x00, 0x3C, 0x00, 0x3F)
+        @io.set_encoding("UTF-16BE")
+      when UInt8.static_array(0x3C, 0x00, 0x3F, 0x00)
+        @io.set_encoding("UTF-16LE")
+      when UInt8.static_array(0x3C, 0x3F, 0x78, 0x6D)
+        # ASCII, ISO 646, UTF-8: we can keep reading with the default UTF-8
+      end
+
+      @io.seek(0, IO::Seek::Set)
+    end
+
+    # TODO: THESE METHODS SHOULD PROBABLY BE PART OF THE PARSER
 
     private def include_path
       @include_path ||=
@@ -80,402 +142,344 @@ module CRXML
       @external_parameter_entities ||= Hash(String, String).new
     end
 
-    def set_encoding(encoding : String) : Nil
-      @io.set_encoding(encoding)
+    def tokenize(& : Token ->) : Nil
+      while token = next_token?
+        yield token
+
+        case token
+        when XMLDecl
+          while tok = next_xmldecl_token?
+            yield tok
+          end
+          skip_s
+        when Doctype
+          while tok = next_dtd_token?
+            yield tok
+          end
+        when STag
+          while tok = next_attribute?(token.name)
+            yield tok
+            break if tok.is_a?(ETag)
+          end
+        end
+      end
     end
 
-    private def detect_encoding
-      bytes = uninitialized UInt8[4]
-      @io.read_fully?(bytes.to_slice)
+    def next_token?(skip_s = false) : Token?
+      self.skip_s if skip_s
+      start_location = @location
 
-      # detect Byte Order Mark (BOM)
-
-      case bytes
-      when UInt8.static_array(0x00, 0x00, 0xFE, 0xFF)
-        @io.set_encoding("UCS-4BE")
-        return
-      when UInt8.static_array(0xFF, 0xFE, 0x00, 0x00)
-        @io.set_encoding("UCS-4LE")
-        return
-        # when UInt8.static_array(0x00, 0x00, 0xFF, 0xFE)
-        #  @io.set_encoding("UCS-4" # unusual octet order (2143) unsupported?
-        # return
-        # when UInt8.static_array(0xFE, 0xFF, 0x00, 0x00)
-        #  @io.set_encoding("UCS-4" # unusual octet order (3412) unsupported?
-        # return
+      case @current_char
+      when '<'
+        case next_char
+        when '/'
+          next_char
+          name = lex_name
+          self.skip_s
+          expect('>')
+          ETag.new(name, start_location, @location)
+        when '?'
+          next_char
+          name = lex_name
+          if name == "xml"
+            XMLDecl.new(start_location, @location)
+          else
+            # todo: well-formed: name !~ /xml/i
+            data = lex_pi
+            PI.new(name, data, start_location, @location)
+          end
+        when '!'
+          case next_char
+          when '['
+            next_char
+            expect("CDATA")
+            expect('[')
+            data = lex_cdata
+            CDATA.new(data, start_location, @location)
+          when '-'
+            next_char
+            expect('-')
+            data = lex_comment
+            Comment.new(data, start_location, @location)
+          else
+            expect("DOCTYPE")
+            expect_s
+            lex_doctype(start_location)
+          end
+        else
+          name = lex_name
+          STag.new(name, start_location, @location)
+        end
+      #when '&'
+      #  next_char
+      #  name = lex_name
+      #  expect(';')
+      #  EntityRef.new(name, start_location, @location)
+      #when '%'
+      #  next_char
+      #  name = lex_name
+      #  expect(';')
+      #  PEReference.new(name, start_location, @location)
+      when nil
+        # reached eof
+      else
+        data = lex_text
+        Text.new(data, start_location, @location)
       end
-
-      case bytes.to_slice[0, 2]
-      when UInt8.static_array(0xFE, 0xFF).to_slice
-        @io.seek(2, IO::Seek::Set)
-        @io.set_encoding("UTF-16BE")
-        return
-      when UInt8.static_array(0xFF, 0xFE).to_slice
-        @io.seek(2, IO::Seek::Set)
-        @io.set_encoding("UTF-16LE")
-        return
-      end
-
-      if bytes.to_slice[0, 3] == UInt8.static_array(0xEF, 0xBB, 0xBF).to_slice
-        @io.seek(3, IO::Seek::Set)
-        @io.set_encoding("UTF-8")
-        return
-      end
-
-      # autodetect
-
-      case bytes
-      when UInt8.static_array(0x00, 0x00, 0x00, 0x3C)
-        @io.set_encoding("UCS-4BE")
-      when UInt8.static_array(0x3C, 0x00, 0x00, 0x00)
-        @io.set_encoding("UCS-4LE")
-        # when UInt8.static_array(0x00, 0x00, 0x3C, 0x00)
-        #  @io.set_encoding("UCS-4") # unusual octet order (2143) unsupported?
-        # when UInt8.static_array(0x00, 0x3C, 0x00, 0x00)
-        #  @io.set_encoding("UCS-4") # unusual octet order (3412) unsupported?
-      when UInt8.static_array(0x00, 0x3C, 0x00, 0x3F)
-        @io.set_encoding("UTF-16BE")
-      when UInt8.static_array(0x3C, 0x00, 0x3F, 0x00)
-        @io.set_encoding("UTF-16LE")
-      when UInt8.static_array(0x3C, 0x3F, 0x78, 0x6D)
-        # ASCII, ISO 646, UTF-8: we can keep reading with the default UTF-8
-        # when UInt8.static_array(0x4C, 0x6F, 0xA7, 0x94)
-        # EBCDIC: unsupported?
-      end
-
-      @io.seek(0, IO::Seek::Set)
     end
 
-    # Expects a XML declaration and yields the individual tokens (`XmlDecl` and
-    # `Attribute`). Returns when the XML declaration has been successfully
-    # tokenized. Raises `SyntaxError` on errors.
-    #
-    # TODO: check presence of UTF Byte Order Mark (BOM) and set the IO encoding;
-    # See <https://www.w3.org/TR/xml11/#sec-guessing>.
-    def tokenize_xmldecl(& : Token ->) : Nil
+    def next_xmldecl_token? : Token?
+      skip_s
+
+      if current_char == '?'
+        next_char
+        expect('>')
+        nil
+      else
+        start_location = @location
+        name, value = lex_attribute
+        Attribute.new(name, value, start_location, @location)
+      end
+    end
+
+    def doctype_intsubset? : Bool
+      skip_s
+
+      if current_char == '['
+        next_char
+        true
+      else
+        expect('>')
+        false
+      end
+    end
+
+    def next_dtd_token? : Token?
       skip_s
       start_location = @location
 
-      bytes = uninitialized UInt8[4]
-      @io.read_fully?(bytes.to_slice)
-
-      if current_char == '<' && bytes == StaticArray['?'.ord, 'x'.ord, 'm'.ord, 'l'.ord]
-        next_char
-        @location = @location.adjust(column: +4)
-        yield XmlDecl.new(start_location, @location)
-
-        loop do
-          skip_s
-
-          if current_char == '?'
-            next_char
-            expect('>')
-            return
+      case expect('<', ';', '%', ']')
+      when '<'
+        case expect('!', '?')
+        when '!'
+          if current_char == '-'
+            expect('-')
+            data = lex_comment
+            Comment.new(data, start_location, @location)
           else
-            start_location = @location
-            name, value = lex_attribute
-            yield Attribute.new(name, value, start_location, @location)
-          end
-        end
-      else
-        @io.seek(-4, IO::Seek::Current)
-      end
-    end
-
-    # Yields the individual tokens that make the XML Prolog excluding the XML
-    # declaration (see `#tokenize_xmldecl`). Returns when the document root
-    # start tag has been parsed (including its attributes). Raises `SyntaxError`
-    # on errors.
-    def tokenize_prolog(& : Token ->) : Nil
-      loop do
-        skip_s
-
-        start_location = @location
-        char = @current_char
-
-        case char
-        when '<'
-          next_char
-
-          case current_char
-          when '!'
-            case next_char
-            when '-'
-              next_char
-              expect('-')
-              comment = lex_comment
-              yield Comment.new(comment, start_location, @location)
-            else
-              expect("DOCTYPE")
+            case expect("ATTLIST", "ELEMENT", "ENTITY", "NOTATION")
+            when "ATTLIST"
               expect_s
-              name = lex_name
-              skip_s
-              public_id = nil
-              system_id = nil
-              if current_char == 'S' || current_char == 'P'
-                if expect("SYSTEM", "PUBLIC") == "PUBLIC"
-                  expect_s
-                  public_id = lex_pubid_literal
-                end
-                expect_s
-                system_id = lex_system_literal
-                skip_s
-              end
-              yield SDoctype.new(name, public_id, system_id, start_location, @location)
-
-              if @current_char == '['
-                expect '['
-
-                loop do
-                  skip_s
-                  start_location = @location
-
-                  case expect(']', '<', '%')
-                  when ']'
-                    break
-                  when '<'
-                    case current_char
-                    when '?'
-                      name, content = lex_pi
-                      yield PI.new(name, content, start_location, @location)
-                    when '!'
-                      case next_char
-                      when '-'
-                        next_char
-                        expect('-')
-                        comment = lex_comment
-                        yield Comment.new(comment, start_location, @location)
-                      else
-                        case expect("ELEMENT", "ATTLIST", "ENTITY", "NOTATION")
-                        when "ENTITY"
-                          expect_s
-
-                          if pe = (current_char == '%')
-                            next_char
-                            expect_s
-                          end
-
-                          name = lex_name
-                          expect_s
-
-                          if current_char == 'S' || current_char == 'P'
-                            if expect("SYSTEM", "PUBLIC") == "PUBLIC"
-                              expect_s
-                              public_id = lex_pubid_literal
-                            end
-                            expect_s
-                            system_id = lex_system_literal
-
-                            unless current_char == '>'
-                              expect_s
-                              if current_char == 'N'
-                                expect("NDATA")
-                                expect_s
-                                notation = lex_name
-                              end
-                            end
-
-                            if pe
-                              self.external_parameter_entities[name] ||= system_id if @include_external_entities
-                              yield ExternalPE.new(name, public_id, system_id, notation, start_location, @location)
-                            else
-                              self.external_entities[name] ||= system_id if @include_external_entities
-                              yield ExternalEntity.new(name, public_id, system_id, notation, start_location, @location)
-                            end
-                          else
-                            value = lex_entity_value
-                            if pe
-                              self.parameter_entities[name] ||= value
-                              yield PE.new(name, value, start_location, @location)
-                            else
-                              self.entities[name] ||= value
-                              yield Entity.new(name, value, start_location, @location)
-                            end
-                          end
-
-                          skip_s
-                          expect '>'
-                        else
-                          # todo: elementdecl
-                          # todo: AttlistDecl
-                          # todo: NotationDecl
-                          until next_char == '>'
-                            # ignore for now
-                          end
-                          next_char
-                        end
-                      end
-                    end
-                  when '%'
-                    name = lex_name
-
-                    # don't consume the current char until we check for recursion, because
-                    # #next_char may terminate the replacement text and remove the entity
-                    # from entity_recursion_check which would fail to detect recursion
-                    expect(';') unless current_char == ';'
-
-                    if pe = @parameter_entities.try(&.fetch(name) { nil })
-                      replacement_text IO::Memory.new(pe), "pe:#{name}"
-                    elsif (system_id = @external_parameter_entities.try(&.fetch(name) { nil })) && (include_path = self.include_path)
-                      path = File.expand_path(File.join(include_path, system_id))
-                      if path.starts_with?(include_path) && File.exists?(path)
-                        replacement_text File.new(path), "pe:#{name}"
-                        return
-                      else
-                        next_char # ;
-                      end
-                    else
-                      next_char # ;
-                    end
-                  end
-                end
-
-                skip_s
-              end
-
-              yield EDoctype.new(start_location, @location)
-
-              expect '>'
+              lex_attlistdecl(start_location)
+            when "ELEMENT"
+              expect_s
+              lex_elementdecl(start_location)
+            when "ENTITY"
+              expect_s
+              lex_entitydecl(start_location)
+            when "NOTATION"
+              expect_s
+              lex_notationdecl(start_location)
             end
-          when '?'
-            name, content = lex_pi
-            yield PI.new(name, content, start_location, @location)
-          else
-            name = lex_name
-            yield STag.new(name, start_location, @location)
-            lex_tag_attributes(name) { |attr| yield attr }
-            # reached root element: we're done lexing the prolog
-            break
           end
-        when nil
-          # reached EOF
-          break
-        else
-          raise SyntaxError.new("unexpected '#{char}'", @location)
+        when '?'
+          name = lex_name
+          # todo: well-formed: name !~ /xml/i
+          data = lex_pi
+          PI.new(name, data, start_location, @location)
         end
-      end
-    end
-
-    # todo: option to skip whitespaces
-    def tokenize_logical_structures(& : Token ->) : Nil
-      loop do
-        start_location = @location
-        char = @current_char
-
-        case char
-        when '<'
-          next_char
-
-          case current_char
-          when '/'
-            next_char
-            name = lex_name
-            skip_s
-            expect '>'
-            yield ETag.new(name, start_location, @location)
-          when '!'
-            case next_char
-            when '-'
-              next_char
-              expect('-')
-              comment = lex_comment
-              yield Comment.new(comment, start_location, @location)
-            when '['
-              next_char
-              expect("CDATA")
-              expect('[')
-              cdata = lex_cdata
-              yield CDATA.new(cdata, start_location, @location)
-            else
-              raise SyntaxError.new("unknown <! markup in logical structures", @location)
-            end
-          when '?'
-            name, content = lex_pi
-            yield PI.new(name, content, start_location, @location)
-          else
-            name = lex_name
-            yield STag.new(name, start_location, @location)
-            lex_tag_attributes(name) { |attr| yield attr }
-          end
-        when nil
-          # reached EOF
-          break
-        else
-          content = lex_text
-          yield Text.new(content, start_location, @location)
-        end
-      end
-    end
-
-    private def lex_tag_attributes(tag_name, & : Token ->) : Nil
-      loop do
+      when '%'
+        name = lex_name
+        expect(';')
+        PEReference.new(name, start_location, @location)
+      when ']'
+        # done
         skip_s
-        start_location = @location
+        expect('>')
+        nil
+      end
+    end
+
+    private def lex_doctype(start_location)
+      name = lex_name
+      skip_s
+      unless current_char == '[' || current_char == '>'
+        public_id, system_id = lex_external_id
+        skip_s
+      end
+      Doctype.new(name, public_id, system_id, start_location, @location)
+    end
+
+    # TODO: AttDef is optional (as per the grammar)
+    private def lex_attlistdecl(start_location) : AttlistDecl
+      dtname = lex_name
+      defs = [] of DOM::AttDef
+
+      loop do
+        expect_s if s?(current_char)
+        break if current_char == '>'
+
+        name = lex_name
+        expect_s
 
         case current_char
+        when '('
+          type = "ENUMERATION"
+          enumeration = lex_enumeratedtype { lex_nmtoken }
         when '>'
-          next_char
-          break
-        when '/'
-          next_char
-          expect '>'
-          yield ETag.new(tag_name, start_location, @location)
           break
         else
-          name, value = lex_attribute
-          yield Attribute.new(name, value, start_location, @location)
-        end
-      end
-    end
-
-    def expect_s
-      unless s?(@current_char)
-        raise SyntaxError.new("Expected space but got #{@current_char.inspect}", @location)
-      end
-      skip_s
-    end
-
-    def skip_s
-      while (char = @current_char) && s?(char)
-        next_char
-      end
-    end
-
-    private def lex_pi
-      next_char
-
-      name = lex_name
-      # TODO: well-formed: reject name =~ /xml/i
-      skip_s
-
-      content = String.build do |str|
-        loop do
-          if current_char == '?'
-            if next_char == '>'
-              next_char # >
-              break
+          case type = expect("CDATA", "ID", "ENTITY", "ENTITIES", "NMTOKEN", "NOTATION")
+          when "ID"
+            if current_char == 'R'
+              expect("REF")
+              if current_char == 'S'
+                next_char
+                type = "IDREFS"
+              else
+                type = "IDREF"
+              end
             end
-            str << '?'
-          else
-            if @options.well_formed? && restricted_char?(current_char)
-              raise SyntaxError.new("Invalid Char in data #{current_char.inspect}", @location)
+          when "NMTOKEN"
+            if current_char == 'S'
+              expect('S')
+              type = "NMTOKENS"
             end
-            str << current_char
-            next_char
+          when "NOTATION"
+            expect_s
+            enumeration = lex_enumeratedtype { lex_name }
           end
         end
+
+        expect_s
+
+        if current_char == '#'
+          next_char
+          case default = expect("REQUIRED", "IMPLIED", "FIXED")
+          when "FIXED"
+            expect_s
+            value = lex_attvalue
+          end
+        else
+          value = lex_attvalue
+        end
+
+        defs << DOM::AttDef.new(name, type, enumeration, default, value)
       end
 
-      {name, content}
+      skip_s
+      expect '>'
+      AttlistDecl.new(dtname, defs, start_location, @location)
+    end
+
+    private def lex_enumeratedtype(& : -> String) : Array(String)
+      expect('(')
+      skip_s
+
+      enumeration = [] of String
+      loop do
+        skip_s
+        enumeration << yield
+        skip_s
+
+        case expect('|', ')')
+        when '|'
+          next
+        when ')'
+          break
+        end
+      end
+      enumeration
+    end
+
+    private def lex_elementdecl(start_location) : ElementDecl
+      name = lex_name
+      expect_s
+
+      content = String.build do |str|
+        until (char = current_char) == '>'
+          str << char
+          next_char
+        end
+      end.strip
+      next_char # >
+
+      ElementDecl.new(name, content, start_location, @location)
+    end
+
+    private def lex_entitydecl(start_location) : EntityDecl
+      if parameter = (current_char == '%')
+        next_char
+        expect_s
+      end
+
+      name = lex_name
+      expect_s
+
+      if quote?(current_char)
+        value = lex_entity_value
+      else
+        public_id, system_id = lex_external_id
+        expect_s unless current_char == '>'
+
+        unless current_char == '>'
+          expect("NDATA")
+          expect_s
+          notation_id = lex_name
+        end
+      end
+
+      skip_s
+      expect('>')
+      EntityDecl.new(parameter, name, value, public_id, system_id, notation_id, start_location, @location)
+    end
+
+    private def lex_notationdecl(start_location) : NotationDecl
+      name = lex_name
+      expect_s
+
+      case expect("PUBLIC", "SYSTEM")
+      when "PUBLIC"
+        expect_s
+        public_id = lex_pubid_literal
+        expect_s if s?(current_char)
+        system_id = lex_system_literal if quote?(current_char)
+      when "SYSTEM"
+        expect_s
+        system_id = lex_system_literal
+      end
+
+      skip_s
+      expect('>')
+      NotationDecl.new(name, public_id, system_id, start_location, @location)
+    end
+
+    def next_attribute?(name : String) : Token?
+      skip_s
+
+      case current_char
+      when '>'
+        next_char
+        nil
+      when '/'
+        start_location = @location
+        next_char
+        expect('>')
+        ETag.new(name, start_location, @location)
+      else
+        start_location = @location
+        name, value = lex_attribute
+        Attribute.new(name, value, start_location, @location)
+      end
     end
 
     # OPTIMIZE: fast-mode: accept anything but whitespace, '>', '"', '\'' or ';'
-    private def lex_name
+    def lex_name : String
       if (char = @current_char) && name_start_char?(char)
         @buf << char
         next_char
       else
-        raise SyntaxError.new("Expected NameStartChar but got #{char.inspect}", @location)
+        raise SyntaxError.new("Expected NameStartChar", @location)
       end
 
       while (char = @current_char) && name_char?(char)
@@ -489,7 +493,7 @@ module CRXML
     end
 
     # OPTIMIZE: fast-mode: accept anything but whitespace, '>', '"', '\'' or ';'
-    private def lex_nmtoken
+    def lex_nmtoken : String
       while (char = @current_char) && name_char?(char)
         @buf << char
         next_char
@@ -499,7 +503,8 @@ module CRXML
       @buf.clear
     end
 
-    private def lex_attribute
+    # TODO: split in two: #lex_attname, #lex_attvalue (?)
+    def lex_attribute : {String, String?}
       name = lex_name
       skip_s
 
@@ -509,31 +514,22 @@ module CRXML
 
         # TODO: recover: allow missing quotes (end attvalue at whitespace, '>',
         # '/>', '?>', '"' or '\'')
-        quote = expect('\'', '"')
+        quote = expect('"', '\'')
         value = lex_attvalue(quote)
       elsif @options.well_formed?
-        raise SyntaxError.new("Attribute must have a value", @location)
+        expect('=')
       end
 
-      {name, value || ""}
+      {name, value}
     end
 
-    private def lex_entity_value
-      quote = expect('"', '\'')
-
-      String.build do |str|
-        until (char = current_char) == quote
-          # if @options.well_formed? && restricted_char?(char)
-          #   raise SyntaxError.new("Invalid Char in data #{char.inspect}", @location)
-          # end
-          normalize_to(str, char, normalize_s: true, include_pe: true)
-        end
-        next_char
-      end
+    private def lex_attvalue
+      lex_attvalue(expect('"', '\''))
     end
 
-    # TODO: if attribute type is NMTOKENS then merge all whitespaces & skip leading/trailing whitespace
-    # TODO: well-formed: reject '<'
+    # TODO: stop processing on PEReference / EntityRef (except predefined)
+    # TODO: option to skip trailing/ending S (NMTOKENS)
+    # TODO: option to merge S (NMTOKENS)
     private def lex_attvalue(quote)
       String.build do |str|
         until (char = current_char) == quote
@@ -547,7 +543,35 @@ module CRXML
       end
     end
 
-    private def lex_system_literal
+    def lex_entity_value : String
+      quote = expect('"', '\'')
+
+      String.build do |str|
+        until (char = current_char) == quote
+          # if @options.well_formed? && restricted_char?(char)
+          #   raise SyntaxError.new("Invalid Char in data #{char.inspect}", @location)
+          # end
+          normalize_to(str, char, normalize_s: true, include_pe: true)
+        end
+        next_char
+      end
+    end
+
+    def lex_external_id : {String?, String?}
+      case expect("SYSTEM", "PUBLIC")
+      when "PUBLIC"
+        expect_s
+        public_id = lex_pubid_literal
+        expect_s
+        system_id = lex_system_literal
+      when "SYSTEM"
+        expect_s
+        system_id = lex_system_literal
+      end
+      {public_id, system_id}
+    end
+
+    def lex_system_literal : String
       quote = expect('"', '\'')
 
       String.build do |str|
@@ -559,7 +583,7 @@ module CRXML
       end
     end
 
-    private def lex_pubid_literal
+    def lex_pubid_literal : String
       quote = expect('"', '\'')
 
       String.build do |str|
@@ -575,67 +599,19 @@ module CRXML
       end
     end
 
-    private def lex_text
-      String.build do |str|
-        while (char = @current_char) && char != '<'
-          if @options.well_formed?
-            if char == ']'
-              if next_char == ']' && peek_char == '>'
-                raise SyntaxError.new("Text content may not contain a literal ']]>' sequence", @location)
-              end
-              str << ']'
-              next
-            end
-            if restricted_char?(char)
-              raise SyntaxError.new("Invalid Char in data #{char.inspect}", @location)
-            end
-          end
-          normalize_to(str, char, include_entity: true, process_entity: true)
-        end
-      end
-    end
-
-    private def lex_comment
+    def lex_pi : String
+      skip_s
       String.build do |str|
         loop do
-          if current_char == '-'
-            if next_char == '-'
-              if peek_char == '>'
-                next_char # -
-                next_char # >
-                break
-              elsif @options.well_formed?
-                raise ValidationError.new("Double hyphen within comment", @location.adjust(column: -2))
-              end
+          if current_char == '?'
+            if next_char == '>'
+              next_char
+              break
             end
-            str << '-'
-          end
-
-          if @options.well_formed? && restricted_char?(current_char)
-            raise ValidationError.new("Invalid XML char #{current_char.inspect}", @location)
-          end
-
-          str << current_char
-          next_char
-        end
-      end
-    end
-
-    private def lex_cdata
-      String.build do |str|
-        loop do
-          if current_char == ']'
-            if next_char == ']'
-              if peek_char == '>'
-                next_char # ]
-                next_char # >
-                break
-              end
-            end
-            str << ']'
+            str << '?'
           else
-            if @options.well_formed? && !char?(current_char)
-              raise ValidationError.new("Invalid XML char #{current_char.inspect}", @location)
+            if @options.well_formed? && restricted_char?(current_char)
+              raise SyntaxError.new("Invalid Char", @location)
             end
             str << current_char
             next_char
@@ -644,9 +620,123 @@ module CRXML
       end
     end
 
-    private def expect(*names : String) : String
-      min = names.min_by(&.bytesize).bytesize
-      max = names.max_by(&.bytesize).bytesize
+    def skip_text : Nil
+      consume_text { }
+    end
+
+    def lex_text : String
+      String.build do |str|
+        consume_text do |char|
+          normalize_to(str, char, include_entity: true, process_entity: true)
+        end
+      end
+    end
+
+    private def consume_text(&) : Nil
+      if @options.well_formed?
+        while (char = @current_char) && char != '<'
+          if char == ']'
+            if next_char == ']' && peek_char == '>'
+              raise SyntaxError.new("Text content may not contain a literal ']]>' sequence", @location)
+            end
+            yield ']'
+            next
+          end
+          if restricted_char?(char)
+            raise SyntaxError.new("Invalid Char in data", @location)
+          end
+          yield char
+        end
+      else
+        while (char = @current_char) && char != '<'
+          yield char
+        end
+      end
+    end
+
+    def skip_comment : Nil
+      consume_comment { }
+    end
+
+    def lex_comment : String
+      String.build do |str|
+        consume_comment { |char| str << char }
+      end
+    end
+
+    private def consume_comment(&)
+      loop do
+        char = current_char
+
+        if char == '-'
+          if next_char == '-'
+            if peek_char == '>'
+              next_char # -
+              next_char # >
+              break
+            elsif @options.well_formed?
+              raise ValidationError.new("Double hyphen within comment", @location.adjust(column: -2))
+            end
+          end
+
+          yield '-'
+          next
+        end
+
+        if @options.well_formed? && restricted_char?(char)
+          raise ValidationError.new("Invalid char in comment", @location)
+        end
+
+        yield char
+        next_char
+      end
+    end
+
+    def lex_cdata : String
+      String.build do |str|
+        loop do
+          char = current_char
+
+          if char == ']'
+            if next_char == ']'
+              if peek_char == '>'
+                next_char # ]
+                next_char # >
+                break
+              end
+            end
+
+            str << ']'
+            next
+          end
+
+          if @options.well_formed? && !char?(char)
+            raise ValidationError.new("Invalid char in cdata", @location)
+          end
+
+          str << char
+          next_char
+        end
+      end
+    end
+
+    def expect_s : Nil
+      unless s?(@current_char)
+        raise SyntaxError.new("Expected space", @location)
+      end
+      skip_s
+    end
+
+    def skip_s : Nil
+      while (char = @current_char) && s?(char)
+        next_char
+      end
+    end
+
+    private def expect(*names : String) : String?
+      location = @location
+      min = names.min_by(&.size).size
+      max = names.max_by(&.size).size
 
       min.times do |i|
         @buf << current_char
@@ -666,7 +756,7 @@ module CRXML
         end
       end
 
-      raise SyntaxError.new("Expected #{names.join(", ")}", @location.adjust(column: -max))
+      raise SyntaxError.new("Expected #{names.join(", ")}", location)
     ensure
       @buf.clear
     end
@@ -680,7 +770,7 @@ module CRXML
           raise SyntaxError.new("Expected #{chars.map(&.inspect).join(", ")} but got #{current_char.inspect}", @location)
         end
       else
-        raise SyntaxError.new("Expected #{chars.map(&.inspect).join(", ")} but reached end-of-file", @location)
+        raise SyntaxError.new("Expected #{chars.map(&.inspect).join(", ")} but reached EOF", @location)
       end
     end
 
@@ -692,7 +782,6 @@ module CRXML
     # - +normalize_s+: set to true to replace whitespaces with a single space (e.g. ATTVALUE);
     # - +merge_s+: set to true to group whitespaces (e.g. NMTOKENS);
     # - +process_entity+: set to true to process the replacement text of entities (e.g. CONTENT).
-    #
     private def normalize_to(str, char, include_pe = false, include_entity = false, normalize_s = false, merge_s = false, process_entity = false)
       if char == '&'
         if next_char == '#'
@@ -783,7 +872,7 @@ module CRXML
       @buf.clear
     end
 
-    # TODO: unknown, well formed, entities should yield an EntityRef token.
+    # NOTE: DEPRECATED (?)
     private def normalize_entity_ref(str, process_entity = false)
       name = lex_name
 
@@ -798,29 +887,29 @@ module CRXML
           return
         end
 
-        if value = @entities.try(&.fetch(name) { nil })
-          if process_entity
-            replacement_text IO::Memory.new(value), "entity:#{name}"
-          else
-            next_char # ;
-            str << value
-          end
-          return
-        end
+        # if value = @entities.try(&.fetch(name) { nil })
+        #   if process_entity
+        #     replacement_text IO::Memory.new(value), "entity:#{name}"
+        #   else
+        #     next_char # ;
+        #     str << value
+        #   end
+        #   return
+        # end
 
-        if process_entity && (system_id = @external_entities.try(&.fetch(name) { nil }))
-          if include_path = self.include_path
-            path = File.expand_path(File.join(include_path, system_id))
-            if path.starts_with?(include_path) && File.exists?(path)
-              replacement_text File.new(path), "entity:#{name}"
-              return
-            end
-          end
-        end
+        # if process_entity && (system_id = @external_entities.try(&.fetch(name) { nil }))
+        #   if include_path = self.include_path
+        #     path = File.expand_path(File.join(include_path, system_id))
+        #     if path.starts_with?(include_path) && File.exists?(path)
+        #       replacement_text File.new(path), "entity:#{name}"
+        #       return
+        #     end
+        #   end
+        # end
 
-        if @options.well_formed?
-          raise ValidationError.new("Unknown entity", @location.adjust(column: -1 - name.size))
-        end
+        # if @options.well_formed?
+        #   raise ValidationError.new("Unknown entity", @location.adjust(column: -1 - name.size))
+        # end
 
         next_char # ;
         str << '&' << name << ';'
@@ -831,20 +920,21 @@ module CRXML
       end
     end
 
+    # NOTE: DEPRECATED (?)
     private def normalize_pe_reference(str)
       name = lex_name
 
       if current_char == ';'
         next_char
 
-        if value = @parameter_entities.try(&.fetch(name) { nil })
-          str << value
-          return
-        end
+        # if value = @parameter_entities.try(&.fetch(name) { nil })
+        #   str << value
+        #   return
+        # end
 
-        if @options.well_formed?
-          raise ValidationError.new("Unknown parameter entity", @location.adjust(column: -2 - name.size))
-        end
+        # if @options.well_formed?
+        #   raise ValidationError.new("Unknown parameter entity", @location.adjust(column: -2 - name.size))
+        # end
 
         str << '%' << name << ';'
       elsif @options.well_formed?
@@ -854,104 +944,56 @@ module CRXML
       end
     end
 
-    # https://www.w3.org/TR/xml11/#sec-line-ends
-    private def normalize_line_endings(current_char)
-      if current_char == '\r'
-        @io.read_char.tap do |char|
-          @peek_char = char unless StaticArray['\n', '\u0085'].includes?(char)
-        end
-        current_char = '\n'
-      elsif StaticArray['\u0085', '\u2028'].includes?(current_char)
-        current_char = '\n'
-      end
-      current_char
-    end
-
-    private def peek_char : Char
-      peek_char = nil
-
-      while replacement = @replacement_texts.last?
-        if peek_char = replacement[0].read_char
-          break
-        else
-          @current_char = replacement[2]
-          terminate_replacement(replacement)
-        end
-      end
-
-      peek_char ||= @io.read_char
-
-      if peek_char
-        @peek_char = peek_char
+    private def peek_char : Char?
+      if char = @peek_char
+        char
+      elsif char = @peek_peek_char
+        @peek_peek_char = nil
+        @peek_char = char
+      elsif char = @io.read_char
+        char, @peek_peek_char = normalize_line_endings(char)
+        @peek_char = char
       else
-        raise SyntaxError.new("Reached end-of-file", @location)
+        raise SyntaxError.new("Reached EOF", @location)
       end
     end
 
     private def current_char : Char
-      @current_char || raise SyntaxError.new("Reached end-of-file", @location)
+      @current_char || raise SyntaxError.new("Reached EOF", @location)
     end
 
     private def next_char : Char?
-      current_char = nil
-
-      if current_char = @peek_char
-        @peek_char = nil
+      if char = @peek_char
+        @peek_char, @peek_peek_char = @peek_peek_char, nil
       else
-        while replacement = @replacement_texts.last?
-          if current_char = replacement[0].read_char
-            break
-          else
-            current_char = replacement[2]
-            terminate_replacement(replacement)
-          end
-        end
+        char = @io.read_char
       end
 
-      current_char ||= @io.read_char
+      char, @peek_char = normalize_line_endings(char)
+      @location.update(char) if char
 
-      if current_char = normalize_line_endings(current_char)
-        @location.update(current_char) if @replacement_texts.empty?
-      end
-
-      @current_char = current_char
+      @current_char = char
     end
 
-    private def replacement_text(io : IO, key : String)
-      if entity_recursion_check.includes?(key)
-        raise SyntaxError.new("#{key} directly or indirectly refers to itself", @location)
+    # https://www.w3.org/TR/xml11/#sec-line-ends
+    private def normalize_line_endings(current_char)
+      if current_char == '\r'
+        peek_char = @io.read_char
+        peek_char = nil if StaticArray['\n', '\u0085'].includes?(peek_char)
+        current_char = '\n'
+      elsif StaticArray['\u0085', '\u2028'].includes?(current_char)
+        current_char = '\n'
       end
-      entity_recursion_check.add(key)
-
-      # now we CAN and MUST consume the ';' but we can't call `#next_char` since
-      # it might terminate the current replacement text which would delete the
-      # current entity from @entity_recursion_check and we'd miss indirect self
-      # references
-      if @peek_char
-        current_char = @peek_char
-        @peek_char = nil
-      elsif replacement = @replacement_texts.last?
-        current_char = replacement[0].read_char
-      else
-        current_char = @io.read_char
-      end
-      if current_char = normalize_line_endings(current_char)
-        @location.update(current_char) if @replacement_texts.empty?
-      end
-
-      # TODO: keep and maintain a location for each replacement (pointing to the
-      # actual place in the XML file, or the external file)
-
-      @replacement_texts << {io, key, current_char}
-      @peek_char = nil
-      @current_char = io.read_char
+      {current_char, peek_char}
     end
 
-    private def terminate_replacement(replacement)
-      entity_recursion_check.delete(replacement[1])
-      @peek_char = nil
-      @replacement_texts.pop
-      replacement[0].close if replacement[0].is_a?(File)
+    # https://www.w3.org/TR/xml11/#NT-S
+    private def s?(char)
+      StaticArray[' ', '\t', '\n', '\r'].includes?(char)
+    end
+
+    private def quote?(char)
+      char == '"' || char == '\''
     end
 
     # https://www.w3.org/TR/xml11/#NT-Char
@@ -968,15 +1010,10 @@ module CRXML
       StaticArray[
         '\u0001'..'\u0008',
         '\u000B'..'\u000C',
+        '\u0086'..'\u009F',
         '\u000E'..'\u001F',
         '\u007F'..'\u0084',
-        '\u0086'..'\u009F',
       ].any? { |c| c === char }
-    end
-
-    # https://www.w3.org/TR/xml11/#NT-S
-    private def s?(char)
-      StaticArray[' ', '\t', '\n', '\r'].includes?(char)
     end
 
     # https://www.w3.org/TR/xml11/#NT-NameStartChar

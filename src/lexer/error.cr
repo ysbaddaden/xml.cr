@@ -15,6 +15,9 @@ module CRXML
   class SyntaxError < Error
   end
 
+  class ParserError < Error
+  end
+
   class ValidationError < Error
   end
 end

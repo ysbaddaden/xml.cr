@@ -8,136 +8,146 @@ module CRXML::DOM
     def initialize(@lexer : Lexer)
       @document = XMLDocument.new
 
-      parse_xmldecl
+      # Prolog
+      token = @lexer.next_token?(skip_s: @lexer.@options.well_formed?)
 
-      if parse_prolog
-        parse_logical_structures
+      if parse_xmldecl?(token)
+        token = @lexer.next_token?(skip_s: true)
       end
 
-      if @lexer.@options.well_formed?
-        ensure_nothing_after_root_element
-      end
-    end
-
-    # Prolog: XMLDecl
-    private def parse_xmldecl : Nil
-      @lexer.tokenize_xmldecl do |tok|
-        case tok
-        when Lexer::XmlDecl
-          # nothing to do (we only expect it)
-        when Lexer::Attribute
-          case tok.name
-          when "version"
-            @document.version = tok.value
-          when "encoding"
-            @lexer.set_encoding(tok.value)
-            @document.encoding = tok.value
-          when "standalone"
-            @document.standalone = tok.value
-          else
-            # todo: recover?
-            raise SyntaxError.new("unexpected attribute #{tok.name} in XML declaration", tok.start_location)
-          end
-        else
-          raise "BUG: unexpected #{tok}"
-        end
-      end
-    end
-
-    # Prolog: Doctype?, Misc* (PI | Comment)
-    private def parse_prolog : Bool
-      doctype = nil
-
-      @lexer.tokenize_prolog do |tok|
-        case tok
-        when Lexer::SDoctype
-          doctype = @document.doctype = DocumentType.new(tok.name, tok.public_id || "", tok.system_id || "", @document)
-        when Lexer::EDoctype
-          doctype = nil
+      loop do
+        case token
+        when Lexer::Doctype
+          parse_doctype(token)
         when Lexer::STag
-          @document.root = Element.new(tok.name, @document)
-        when Lexer::Attribute
-          @document.root.attributes[tok.name] = tok.value
-        when Lexer::ETag
-          # edge case: the root element is an empty element
-          return false
-        when Lexer::PI
-          if doctype
-            doctype.append(ProcessingInstruction.new(tok.name, tok.content, @document))
-          else
-            @document.append(ProcessingInstruction.new(tok.name, tok.content, @document))
-          end
+          # reached root element
+          document.root = parse_element(token)
+          token = @lexer.next_token?(skip_s: true)
+          break
         when Lexer::Comment
-          if doctype
-            doctype.append(Comment.new(tok.content, @document))
-          else
-            @document.append(Comment.new(tok.content, @document))
-          end
-        when Lexer::PE
-          doctype.append(Entity.new(true, tok.name, tok.value, nil, nil, nil)) if doctype
-        when Lexer::ExternalPE
-          doctype.append(Entity.new(true, tok.name, nil, tok.public_id, tok.system_id, tok.notation)) if doctype
-        when Lexer::Entity
-          doctype.append(Entity.new(false, tok.name, tok.value, nil, nil, nil)) if doctype
-        when Lexer::ExternalEntity
-          doctype.append(Entity.new(false, tok.name, nil, tok.public_id, tok.system_id, tok.notation)) if doctype
-          # when Lexer::AttList
-          # when Lexer::Element
-          # when Lexer::Notation
+          @document.append(Comment.new(token.data, @document))
+        when Lexer::PI
+          @document.append(ProcessingInstruction.new(token.name, token.data, @document))
+        when nil
+          return
         else
-          raise "BUG: unexpected #{tok}"
+          raise ParserError.new("Unexpected #{token.class.name} in Misc", token.start_location)
         end
+
+        token = @lexer.next_token?(skip_s: true)
       end
 
-      # done: we reached the root element (not empty)
+      # Misc*
+      loop do
+        case token
+        when Lexer::Comment
+          @document.append(Comment.new(token.data, @document))
+        when Lexer::PI
+          @document.append(ProcessingInstruction.new(token.name, token.data, @document))
+        when nil
+          return
+        else
+          raise ParserError.new("Unexpected #{token.class.name} in Misc", token.start_location)
+        end
+
+        token = @lexer.next_token?(skip_s: true)
+      end
+    end
+
+    # TODO: well-formed: the attributes are ordered: version [encoding] [standalone]
+    private def parse_xmldecl?(token : Lexer::XMLDecl)
+      while attr = @lexer.next_xmldecl_token?
+        case attr.name
+        when "version"
+          @document.version = attr.value
+        when "encoding"
+          @document.encoding = attr.value
+          @lexer.set_encoding(attr.value)
+        when "standalone"
+          @document.standalone = attr.value
+        else
+          raise ParserError.new("Unexpected attribute #{attr.name} in XMLDecl", attr.start_location)
+        end
+      end
       true
     end
 
-    # Logical Structures (elements)
-    private def parse_logical_structures : Nil
-      current_element = @document.root
+    private def parse_xmldecl?(token : Lexer::Token?)
+      false
+    end
 
-      state = [] of Element
-      state << current_element
+    private def parse_doctype(token : Lexer::Doctype)
+      raise ParserError.new("Multiple doctype declaration", token.start_location) if @document.doctype?
+      doctype = DocumentType.new(token.name, token.public_id, token.system_id, @document)
+      @document.doctype = doctype
 
-      @lexer.tokenize_logical_structures do |tok|
-        case tok
-        when Lexer::Text
-          current_element.append(Text.new(tok.content, @document))
-        when Lexer::STag
-          element = Element.new(tok.name, @document)
-          current_element.append(element)
-          current_element = element
-          state.push(element)
-        when Lexer::Attribute
-          current_element.attributes[tok.name] = tok.value
-        when Lexer::ETag
-          if current_element.name == tok.name
-            state.pop?
-            current_element = state.last?
-            break unless current_element
+      if @lexer.doctype_intsubset?
+        while token = @lexer.next_dtd_token?
+          case token
+          when Lexer::AttlistDecl
+            attlistdecl = AttlistDecl.new(token.name, token.defs, @document)
+            doctype.append(attlistdecl)
+          when Lexer::ElementDecl
+            doctype.append(ElementDecl.new(token.name, token.content, @document))
+          when Lexer::EntityDecl
+            entitydecl = EntityDecl.new(token.parameter, token.name, token.value, token.public_id, token.system_id, token.notation_id, @document)
+            doctype.append(entitydecl)
+          when Lexer::NotationDecl
+            notationdecl = NotationDecl.new(token.name, token.public_id, token.system_id, @document)
+            doctype.append(notationdecl)
+          when Lexer::Comment
+            doctype.append(Comment.new(token.data, @document))
+          when Lexer::PI
+            doctype.append(ProcessingInstruction.new(token.name, token.data, @document))
+          when Lexer::PEReference
+            # TODO: process PEReference
           else
-            # todo: recover (search the state until we find a matching element,
-            # ignore etag if not found)
-            raise SyntaxError.new("end tag mismatch", tok.start_location)
+            raise ParserError.new("Unexpected #{token.class.name} in DOCTYPE", token.start_location)
           end
-        when Lexer::Comment
-          current_element.append(Comment.new(tok.content, @document))
-        when Lexer::CDATA
-          current_element.append(CDataSection.new(tok.content, @document))
-        when Lexer::PI
-          # current_element.append(ProcessingInstruction.new(tok.name, tok.content, @document))
-        else
-          raise "BUG: unexpected #{tok}"
         end
       end
     end
 
-    private def ensure_nothing_after_root_element
-      @lexer.skip_s
-      @lexer.tokenize_logical_structures do |tok|
-        raise SyntaxError.new("Unexpected content after root element", tok.start_location)
+    private def parse_element(token : Lexer::STag) : Element
+      element = Element.new(token.name, @document)
+
+      while token = @lexer.next_attribute?(element.name)
+        case token
+        when Lexer::Attribute
+          element.attributes[token.name] = token.value
+        when Lexer::ETag
+          # empty tag
+          return element
+        end
       end
+
+      # TODO: unroll the loop and keep a list of nested elements, so we can
+      # try to recover from mismatched elements
+      while token = @lexer.next_token?(skip_s: false)
+        case token
+        when Lexer::STag
+          element.append(parse_element(token))
+        when Lexer::CDATA
+          element.append(CDataSection.new(token.data, @document))
+        when Lexer::Text
+          element.append(Text.new(token.data, @document))
+        when Lexer::EntityRef
+          # TODO: process EntityRef
+        when Lexer::Comment
+          element.append(Comment.new(token.data, @document))
+        when Lexer::PI
+          element.append(ProcessingInstruction.new(token.name, token.data, @document))
+        when Lexer::ETag
+          unless token.name == element.name
+            raise ParserError.new("Element mismatch", token.start_location)
+          end
+          break
+        else
+          raise ParserError.new("Unexpected #{token.class.name} in content", token.start_location)
+        end
+      end
+
+      element
     end
   end
 end
