@@ -7,6 +7,7 @@ require "./document_fragment"
 require "./element"
 require "./attribute"
 require "./character_data"
+require "./entity"
 
 module CRXML
   class DOMError < Exception

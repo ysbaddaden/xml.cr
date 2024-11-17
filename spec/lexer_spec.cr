@@ -149,6 +149,11 @@ describe CRXML::Lexer do
           {:stag, "empty"},
           {:attribute, "value", "&"},
         ], xml: %(<empty value="&#38;">)
+
+        assert_tokens [
+          {:stag, "empty"},
+          {:attribute, "value", "&#38;"},
+        ], xml: %(<empty value="&#38;#38;">)
       end
 
       it "replaces hexadecimal char ref" do
@@ -213,15 +218,12 @@ describe CRXML::Lexer do
         assert_tokens [{:text, "\u{10ffff}"}], xml: "&#x10fFFf;"
       end
 
-      it "replaces predefined entities" do
+      it "tokenizes entity ref" do
         Lexer::PREDEFINED_ENTITIES.each do |name, char|
-          assert_tokens [{:text, char.to_s}], xml: "&#{name};"
+          assert_tokens [{:entity_ref, name}], xml: "&#{name};"
         end
+        assert_tokens [{:entity_ref, "unknown"}], xml: "&unknown;"
       end
-
-      # it "doesn't replace unknown entities" do
-      #   assert_tokens [{:entity_ref, "unknown"}], xml: "&unknown;"
-      # end
 
       # it "replaces local entities" do
       #   skip "missing test"

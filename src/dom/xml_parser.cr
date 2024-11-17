@@ -132,7 +132,7 @@ module CRXML::DOM
         when Lexer::Text
           element.append(Text.new(token.data, @document))
         when Lexer::EntityRef
-          # TODO: process EntityRef
+          element.append(parse_entity_ref(token.name))
         when Lexer::Comment
           element.append(Comment.new(token.data, @document))
         when Lexer::PI
@@ -148,6 +148,36 @@ module CRXML::DOM
       end
 
       element
+    end
+
+    private def parse_entity_ref(name)
+      case name
+      when "amp"
+        Text.new("&", @document)
+      when "lt"
+        Text.new("<", @document)
+      when "gt"
+        Text.new(">", @document)
+      when "quot"
+        Text.new("\"", @document)
+      when "apos"
+        Text.new("'", @document)
+      else
+        if entity = search_entitydecl(name)
+          # TODO: must be lexed/parsed
+          # TODO: may be an external entity: <https://www.w3.org/TR/xml11/#TextEntities>
+          # TODO: beware of in/direct recursion!
+          Text.new(entity.value, @document)
+        else
+          EntityRef.new(name, @document)
+        end
+      end
+    end
+
+    private def search_entitydecl(name)
+      @document.doctype?.try(&.each_child do |node|
+        return node if node.is_a?(EntityDecl) && node.name == name
+      end)
     end
   end
 end

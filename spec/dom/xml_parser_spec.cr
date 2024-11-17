@@ -27,4 +27,32 @@ describe CRXML::DOM::XMLParser do
     text = child.first_child.as(Text)
     assert_equal "Lorem Ipsum", text.data
   end
+
+  it "replaces predefined entities" do
+    document = XMLParser.new(Lexer.new(<<-XML)).document
+    <?xml version="1.1"?>
+    <root>&amp; &lt;name value=&quot;&gt;&unknown;</root>
+    XML
+
+    node = document.root.first_child
+    assert_equal "&", node.as(Text).data
+
+    node = node.next_sibling
+    assert_equal " ", node.as(Text).data
+
+    node = node.next_sibling
+    assert_equal "<", node.as(Text).data
+
+    node = node.next_sibling
+    assert_equal "name value=", node.as(Text).data
+
+    node = node.next_sibling
+    assert_equal "\"", node.as(Text).data
+
+    node = node.next_sibling
+    assert_equal ">", node.as(Text).data
+
+    node = node.next_sibling
+    assert_equal "unknown", node.as(EntityRef).name
+  end
 end

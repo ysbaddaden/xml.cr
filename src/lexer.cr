@@ -113,7 +113,7 @@ module CRXML
       @io.seek(0, IO::Seek::Set)
     end
 
-    # TODO: THESE METHODS SHOULD PROBABLY BE PART OF THE PARSER
+    # TODO: THESE METHODS SHOULD BE PART OF THE PARSER
 
     private def include_path
       @include_path ||=
@@ -210,18 +210,23 @@ module CRXML
           name = lex_name
           STag.new(name, start_location, @location)
         end
-      #when '&'
-      #  next_char
-      #  name = lex_name
-      #  expect(';')
-      #  EntityRef.new(name, start_location, @location)
+      when '&'
+        if peek_char == '#'
+          data = lex_text
+          Text.new(data, start_location, @location)
+        else
+          next_char
+          name = lex_name
+          expect(';') # TODO: recoverable
+          EntityRef.new(name, start_location, @location)
+        end
       #when '%'
       #  next_char
       #  name = lex_name
-      #  expect(';')
+      #  expect(';') # TODO: recoverable
       #  PEReference.new(name, start_location, @location)
       when nil
-        # reached eof
+        # reached EOF
       else
         data = lex_text
         Text.new(data, start_location, @location)
@@ -503,7 +508,6 @@ module CRXML
       @buf.clear
     end
 
-    # TODO: split in two: #lex_attname, #lex_attvalue (?)
     def lex_attribute : {String, String?}
       name = lex_name
       skip_s
@@ -527,33 +531,65 @@ module CRXML
       lex_attvalue(expect('"', '\''))
     end
 
-    # TODO: stop processing on PEReference / EntityRef (except predefined)
+    # TODO: yield on EntityRef
     # TODO: option to skip trailing/ending S (NMTOKENS)
     # TODO: option to merge S (NMTOKENS)
     private def lex_attvalue(quote)
       String.build do |str|
-        until (char = current_char) == quote
-          if char == '<' && @options.well_formed?
+        loop do
+          case char = current_char
+          when quote
             next_char
-            raise SyntaxError.new("Attribute value cannot contain a literal '<'", @location)
+            break
+          when '<'
+            if @options.well_formed?
+              next_char
+              raise SyntaxError.new("Attribute value cannot contain a literal '<'", @location)
+            end
+          when '&'
+            if peek_char == '#'
+              normalize_char_ref(str)
+            else
+              # TODO: process EntityRef
+              str << '&'
+              next_char
+            end
+          else
+            # normalize space
+            str << (s?(char) ? ' ' : char)
+            next_char
           end
-          normalize_to(str, char, normalize_s: true, include_entity: true)
         end
-        next_char
       end
     end
 
+    # TODO: yield on PEReference
     def lex_entity_value : String
       quote = expect('"', '\'')
 
       String.build do |str|
-        until (char = current_char) == quote
-          # if @options.well_formed? && restricted_char?(char)
-          #   raise SyntaxError.new("Invalid Char in data #{char.inspect}", @location)
-          # end
-          normalize_to(str, char, normalize_s: true, include_pe: true)
+        loop do
+          case char = current_char
+          when quote
+            next_char
+            break
+          when '&'
+            if peek_char == '#'
+              normalize_char_ref(str)
+            else
+              str << '&'
+              next_char
+            end
+          when '%'
+            # TODO: process PEReference
+            str << '%'
+            next_char
+          else
+            # normalize space
+            str << (s?(char) ? ' ' : char)
+            next_char
+          end
         end
-        next_char
       end
     end
 
@@ -626,30 +662,33 @@ module CRXML
 
     def lex_text : String
       String.build do |str|
-        consume_text do |char|
-          normalize_to(str, char, include_entity: true, process_entity: true)
-        end
-      end
-    end
-
-    private def consume_text(&) : Nil
-      if @options.well_formed?
         while (char = @current_char) && char != '<'
-          if char == ']'
-            if next_char == ']' && peek_char == '>'
-              raise SyntaxError.new("Text content may not contain a literal ']]>' sequence", @location)
+          if @options.well_formed?
+            if char == ']'
+              if next_char == ']' && peek_char == '>'
+                raise SyntaxError.new("Text content may not contain a literal ']]>' sequence", @location)
+              end
+              str << ']'
+              next
             end
-            yield ']'
-            next
+
+            if restricted_char?(char)
+              raise SyntaxError.new("Invalid Char in data", @location)
+            end
           end
-          if restricted_char?(char)
-            raise SyntaxError.new("Invalid Char in data", @location)
+
+          if char == '&'
+            if peek_char == '#'
+              normalize_char_ref(str)
+              next
+            else
+              # entityref: abort
+              break
+            end
           end
-          yield char
-        end
-      else
-        while (char = @current_char) && char != '<'
-          yield char
+
+          str << char
+          next_char
         end
       end
     end
@@ -782,29 +821,39 @@ module CRXML
     # - +normalize_s+: set to true to replace whitespaces with a single space (e.g. ATTVALUE);
     # - +merge_s+: set to true to group whitespaces (e.g. NMTOKENS);
     # - +process_entity+: set to true to process the replacement text of entities (e.g. CONTENT).
-    private def normalize_to(str, char, include_pe = false, include_entity = false, normalize_s = false, merge_s = false, process_entity = false)
-      if char == '&'
-        if next_char == '#'
-          if next_char == 'x'
-            next_char
-            normalize_hexadecimal_char_ref(str)
-          else
-            normalize_decimal_char_ref(str)
-          end
-        elsif include_entity
-          normalize_entity_ref(str, process_entity)
-        else
-          str << '&'
-        end
-      elsif include_pe && char == '%'
-        normalize_pe_reference(str)
-      elsif s?(char)
-        skip_s if merge_s
-        str << (normalize_s ? ' ' : char)
+    #private def normalize_to(str, char, include_pe = false, include_entity = false, normalize_s = false, merge_s = false, &)
+    #  if char == '&'
+    #    if next_char == '#'
+    #      if next_char == 'x'
+    #        next_char
+    #        normalize_hexadecimal_char_ref(str)
+    #      else
+    #        normalize_decimal_char_ref(str)
+    #      end
+    #    else
+    #      normalize_entity_ref(str) { |entity_ref| yield entity_ref }
+    #    end
+    #  elsif include_pe && char == '%'
+    #    normalize_pe_reference(str)
+    #  elsif s?(char)
+    #    skip_s if merge_s
+    #    str << (normalize_s ? ' ' : char)
+    #    next_char
+    #  else
+    #    str << char
+    #    next_char
+    #  end
+    #end
+
+    private def normalize_char_ref(str)
+      expect('&')
+      expect('#')
+
+      if current_char == 'x'
         next_char
+        normalize_hexadecimal_char_ref(str)
       else
-        str << char
-        next_char
+        normalize_decimal_char_ref(str)
       end
     end
 
@@ -872,47 +921,24 @@ module CRXML
       @buf.clear
     end
 
-    # NOTE: DEPRECATED (?)
-    private def normalize_entity_ref(str, process_entity = false)
+    # NOTE: DEPRECATED
+    private def normalize_entity_ref(str, & : EntityRef ->)
+      start_location = @location.adjust(column: -1)
       name = lex_name
 
       if current_char == ';'
-        # don't consume the current char until we check for recursion, because
-        # #next_char may terminate the replacement text and remove the entity
-        # from entity_recursion_check which would fail to detect recursion
+        next_char
 
         if value = PREDEFINED_ENTITIES[name]?
-          next_char # ;
           str << value
           return
+        else
+          yield EntityRef.new(name, start_location, @location)
         end
-
-        # if value = @entities.try(&.fetch(name) { nil })
-        #   if process_entity
-        #     replacement_text IO::Memory.new(value), "entity:#{name}"
-        #   else
-        #     next_char # ;
-        #     str << value
-        #   end
-        #   return
-        # end
-
-        # if process_entity && (system_id = @external_entities.try(&.fetch(name) { nil }))
-        #   if include_path = self.include_path
-        #     path = File.expand_path(File.join(include_path, system_id))
-        #     if path.starts_with?(include_path) && File.exists?(path)
-        #       replacement_text File.new(path), "entity:#{name}"
-        #       return
-        #     end
-        #   end
-        # end
 
         # if @options.well_formed?
         #   raise ValidationError.new("Unknown entity", @location.adjust(column: -1 - name.size))
         # end
-
-        next_char # ;
-        str << '&' << name << ';'
       elsif @options.well_formed?
         expect(';')
       else
@@ -920,7 +946,7 @@ module CRXML
       end
     end
 
-    # NOTE: DEPRECATED (?)
+    # NOTE: DEPRECATED
     private def normalize_pe_reference(str)
       name = lex_name
 
