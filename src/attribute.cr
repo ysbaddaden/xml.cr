@@ -24,5 +24,9 @@ module CRXML
     def to_s(io : IO) : String
       io << @value
     end
+
+    def clone : self
+      dup
+    end
   end
 end

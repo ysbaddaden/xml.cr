@@ -31,7 +31,7 @@ describe CRXML::DOM::XMLParser do
   it "replaces predefined entities" do
     document = XMLParser.new(Lexer.new(<<-XML)).document
     <?xml version="1.1"?>
-    <root>&amp; &lt;name value=&quot;&gt;&unknown;</root>
+    <root>&amp; &lt;name value=&quot;&gt;&unknown;&apos;</root>
     XML
 
     node = document.root.first_child
@@ -54,5 +54,32 @@ describe CRXML::DOM::XMLParser do
 
     node = node.next_sibling
     assert_equal "unknown", node.as(EntityRef).name
+
+    node = node.next_sibling
+    assert_equal "'", node.as(Text).data
+  end
+
+  it "replaces internal entity" do
+    document = XMLParser.new(Lexer.new(<<-XML)).document
+    <?xml version="1.1"?>
+    <!DOCTYPE root [<!ENTITY ent "123">]>
+    <root>&ent;</root>
+    XML
+
+    node = document.root.first_child
+    assert_instance_of Text, node
+    assert_equal "123", node.as(Text).data
+  end
+
+  it "parses internal entity" do
+    document = XMLParser.new(Lexer.new(<<-XML)).document
+    <?xml version="1.1"?>
+    <!DOCTYPE root [<!ENTITY ent "<foo></foo>">]>
+    <root>&ent;</root>
+    XML
+
+    node = document.root.first_child
+    assert_instance_of Element, node
+    assert_equal "foo", node.as(Element).name
   end
 end

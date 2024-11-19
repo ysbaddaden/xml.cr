@@ -121,24 +121,28 @@ module CRXML::DOM
         end
       end
 
+      parse_content(parent: element)
+    end
+
+    private def parse_content(parent)
       # TODO: unroll the loop and keep a list of nested elements, so we can
       # try to recover from mismatched elements
       while token = @lexer.next_token?(skip_s: false)
         case token
         when Lexer::STag
-          element.append(parse_element(token))
+          parent.append(parse_element(token))
         when Lexer::CDATA
-          element.append(CDataSection.new(token.data, @document))
+          parent.append(CDataSection.new(token.data, @document))
         when Lexer::Text
-          element.append(Text.new(token.data, @document))
+          parent.append(Text.new(token.data, @document))
         when Lexer::EntityRef
-          element.append(parse_entity_ref(token.name))
+          process_entity(token, external: true) { |node| parent.append(node) }
         when Lexer::Comment
-          element.append(Comment.new(token.data, @document))
+          parent.append(Comment.new(token.data, @document))
         when Lexer::PI
-          element.append(ProcessingInstruction.new(token.name, token.data, @document))
+          parent.append(ProcessingInstruction.new(token.name, token.data, @document))
         when Lexer::ETag
-          unless token.name == element.name
+          unless parent.is_a?(Element) && (token.name == parent.name)
             raise ParserError.new("Element mismatch", token.start_location)
           end
           break
@@ -147,37 +151,99 @@ module CRXML::DOM
         end
       end
 
-      element
+      parent
     end
 
-    private def parse_entity_ref(name)
-      case name
-      when "amp"
-        Text.new("&", @document)
-      when "lt"
-        Text.new("<", @document)
-      when "gt"
-        Text.new(">", @document)
-      when "quot"
-        Text.new("\"", @document)
-      when "apos"
-        Text.new("'", @document)
-      else
-        if entity = search_entitydecl(name)
-          # TODO: must be lexed/parsed
-          # TODO: may be an external entity: <https://www.w3.org/TR/xml11/#TextEntities>
-          # TODO: beware of in/direct recursion!
-          Text.new(entity.value, @document)
-        else
-          EntityRef.new(name, @document)
+    private def process_entity(token, external = false, &) : Nil
+      if text = Lexer::PREDEFINED_ENTITIES[token.name]?
+        yield Text.new(text, @document)
+      elsif entitydecl = find_entity_declaration(token.name)
+        unless entitydecl.first_child?
+          if entitydecl.value?
+            parse_internal_entity(entitydecl)
+          elsif external
+            unless parse_external_entity?(entitydecl)
+              yield EntityRef.new(token.name, @document)
+            end
+          else
+            raise ParserError.new("Can't reference external entity here", token.start_location)
+          end
         end
+        entitydecl.each_child { |child| yield child.clone }
+      elsif @lexer.@options.well_formed?
+        raise ParserError.new("Unknown entity", token.start_location)
+      else
+        yield EntityRef.new(token.name, @document)
       end
     end
 
-    private def search_entitydecl(name)
+    private def find_entity_declaration(name)
       @document.doctype?.try(&.each_child do |node|
         return node if node.is_a?(EntityDecl) && node.name == name
       end)
     end
+
+    private def parse_internal_entity(entitydecl)
+      # TODO: set initial lexer location to entitydecl value position
+      lexer = Lexer.new(IO::Memory.new(entitydecl.value), @lexer.@options)
+
+      with_entity_lexer("ge:#{entitydecl.name}", lexer) do
+        parse_content(parent: entitydecl)
+      end
+    end
+
+    # TODO: detect scheme (file://, http://, ...)
+    # TODO: download file from the network (if authorized)
+    # TODO: authorize access to local file (under an allowed list of paths)
+    private def parse_external_entity?(entitydecl)
+      return false unless (io = @lexer.@io).responds_to?(:path)
+
+      path = File.expand_path(File.join(File.dirname(io.path), entitydecl.system_id))
+      return false unless File.exists?(path)
+
+      File.open(path) do |file|
+        lexer = Lexer.new(file, @lexer.@options)
+
+        with_entity_lexer("pe:#{entitydecl.name}", lexer) do
+          # TODO: detect and parse TextDecl, set encoding, ...
+          parse_content(parent: entitydecl)
+        end
+      end
+
+      true
+    end
+
+    private def entity_recursion_check
+      @entity_recursion_check ||= Set(String).new
+    end
+
+    private def with_entity_lexer(key, lexer, &)
+      unless entity_recursion_check.add?(key)
+        raise ParserError.new("Entity directly or indirectly refers to itself", lexer.location)
+      end
+
+      original = @lexer
+      @lexer = lexer
+
+      begin
+        yield
+      ensure
+        @lexer = original
+        entity_recursion_check.delete(key)
+      end
+    end
+
+    private def dirname : String
+    end
+
+    # private def include_path
+    #   if path = @include_path
+    #     path
+    #   elsif (io = @lexer.@io).responds_to?(:path)
+    #     @include_path = File.expand_path(File.dirname(io.path))
+    #   else
+    #     raise RuntimeError.new("Can't parse XML external entity without an include path")
+    #   end
+    # end
   end
 end

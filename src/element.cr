@@ -76,5 +76,21 @@ module CRXML
       io << '\n'
       each_child { |child| child.inspect(io, indent + 2) }
     end
+
+    def clone : self
+      copy = Element.new(@name, @owner_document)
+
+      if (attrs = @attributes) && !attrs.empty?
+        attrs.each do |attr|
+          copy.attributes[attr.name] = attr.value
+        end
+      end
+
+      each_child do |child|
+        copy.append(child.clone)
+      end
+
+      copy
+    end
   end
 end

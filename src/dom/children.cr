@@ -30,4 +30,8 @@ struct CRXML::Children
     each { count += 1 }
     count
   end
+
+  def clear : Nil
+    @head = @tail = nil
+  end
 end

@@ -1,12 +1,14 @@
-# require "./dom"
-
 module CRXML
   # TODO: namespaces
   abstract class Node
-    getter! owner_document : Document
+    getter owner_document : Document
     getter! parent_node : Node
     getter! previous_sibling : Node
     getter! next_sibling : Node
+    protected getter children : Children = Children.new
+
+    private def initialize(@owner_document : Document)
+    end
 
     def parent_element : Element
       @parent_node.as(Element)
@@ -80,6 +82,7 @@ module CRXML
     # end
 
     # def clone_node(deep = false) : Node
+    #   deep ? clone : dup
     # end
 
     def ==(other : Node) : Bool
@@ -164,7 +167,7 @@ module CRXML
     end
 
     protected def relink(parent_node, previous_sibling, next_sibling) : Nil
-      parent_element?.try(&.unlink_child(self))
+      parent_node?.try(&.unlink_child(self))
       unlink_siblings
       link(parent_node, previous_sibling, next_sibling)
     end
@@ -195,5 +198,7 @@ module CRXML
       io << '#' << self.class.name << '\n'
       # each_child { |child| child.inspect(io, indent + 2) }
     end
+
+    abstract def clone : self
   end
 end

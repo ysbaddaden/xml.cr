@@ -5,5 +5,11 @@ module CRXML
 
     def initialize(@owner_document : Document)
     end
+
+    def clone : self
+      copy = DocumentFragment.new(@owner_document)
+      each_child { |child| copy.append(child.clone) }
+      copy
+    end
   end
 end

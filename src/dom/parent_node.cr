@@ -1,6 +1,4 @@
 module CRXML::DOM::ParentNode
-  getter children : Children = Children.new
-
   def first_element_child : Element
     first_element_child { raise NilAssertionError.new("Expected #first_element_child to not be nil") }
   end

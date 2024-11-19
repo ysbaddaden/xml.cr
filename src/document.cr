@@ -49,5 +49,24 @@ module CRXML
       each_child { |child| child.inspect(io, indent + 2) }
       root.inspect(io, indent + 2)
     end
+
+    def clone : self
+      copy = dup
+
+      if doctype = @doctype
+        copy.doctype = doctype.clone
+      end
+
+      if root = @root
+        copy.root = root.clone
+      end
+
+      copy.@children.clear
+      each_child do |child|
+        copy.append(child.clone)
+      end
+
+      copy
+    end
   end
 end

@@ -6,6 +6,8 @@ module CRXML::DOM
     getter! default : String?
     getter! value : String?
 
+    private setter enumeration : Array(String)?
+
     def initialize(@name, @type, @enumeration, @default, @value)
     end
 
@@ -27,6 +29,12 @@ module CRXML::DOM
         io << ' '
         v.inspect(io)
       end
+    end
+
+    def clone : self
+      copy = dup
+      copy.enumeration
+      copy
     end
   end
 end

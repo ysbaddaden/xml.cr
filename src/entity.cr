@@ -11,6 +11,10 @@ module CRXML
       io << ' ' << '%' << ' ' << name
       io << '\n'
     end
+
+    def clone : self
+      dup
+    end
   end
 
   class PEReference < Node
@@ -24,6 +28,10 @@ module CRXML
       io << '#' << self.class.name
       io << ' ' << name
       io << '\n'
+    end
+
+    def clone : self
+      dup
     end
   end
 end

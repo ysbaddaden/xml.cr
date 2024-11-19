@@ -26,11 +26,11 @@ module CRXML
   # when processed as text.
   class Lexer
     PREDEFINED_ENTITIES = {
-      "lt"   => '<',
-      "gt"   => '>',
-      "amp"  => '&',
-      "apos" => '\'',
-      "quot" => '"',
+      "lt"   => "<",
+      "gt"   => ">",
+      "amp"  => "&",
+      "apos" => "'",
+      "quot" => "\"",
     }
 
     def self.new(string : String, **args)
@@ -43,9 +43,10 @@ module CRXML
     @peek_char : Char?
     @peek_peek_char : Char?
     getter options : Options
+    getter location : Location
 
     # TODO: option to skip over comments (don't allocate as strings)
-    def initialize(@io : IO, @options : Options = :none, @include_external_entities = false, @include_path : String? = nil)
+    def initialize(@io : IO, @options : Options = :none)
       @buf = IO::Memory.new
       @pool = StringPool.new
       @location = Location.new(1, 0)
@@ -111,35 +112,6 @@ module CRXML
       end
 
       @io.seek(0, IO::Seek::Set)
-    end
-
-    # TODO: THESE METHODS SHOULD BE PART OF THE PARSER
-
-    private def include_path
-      @include_path ||=
-        if (io = @io).responds_to?(:path)
-          File.expand_path(File.dirname(io.path))
-        end
-    end
-
-    private def entity_recursion_check
-      @entity_recursion_check ||= Set(String).new
-    end
-
-    private def entities
-      @entities ||= Hash(String, String).new
-    end
-
-    private def external_entities
-      @external_entities ||= Hash(String, String).new
-    end
-
-    private def parameter_entities
-      @parameter_entities ||= Hash(String, String).new
-    end
-
-    private def external_parameter_entities
-      @external_parameter_entities ||= Hash(String, String).new
     end
 
     def tokenize(& : Token ->) : Nil

@@ -28,6 +28,10 @@ module CRXML
       indent.times { io << ' ' }
       io << '#' << self.class.name << " data=" << data.inspect << '\n'
     end
+
+    def clone : self
+      dup
+    end
   end
 
   class Text < CharacterData

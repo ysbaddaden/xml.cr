@@ -6,8 +6,6 @@ module CRXML
     property! public_id : String
     property! system_id : String
 
-    getter children : Children = Children.new
-
     def initialize(@name, @public_id, @system_id, @owner_document)
     end
 
@@ -29,11 +27,18 @@ module CRXML
       io << '\n'
       each_child { |child| child.inspect(io, indent + 2) }
     end
+
+    def clone : self
+      copy = DocumentType.new(@name, @public_id, @system_id, @owner_document)
+      each_child { |child| copy.append(child.clone) }
+      copy
+    end
   end
 
   class AttlistDecl < Node
     getter name : String
     getter defs : Array(DOM::AttDef)
+    protected setter defs : Array(DOM::AttDef)
 
     def initialize(@name, @defs, @owner_document)
     end
@@ -44,6 +49,12 @@ module CRXML
       io << ' ' << @name
       defs.each(&.inspect(io, indent))
       io << '\n'
+    end
+
+    def clone : self
+      copy = dup
+      copy.defs = @defs.map(&.clone)
+      copy
     end
   end
 
@@ -65,6 +76,10 @@ module CRXML
       io << ' ' << @name
       io << ' ' << @content
       io << '\n'
+    end
+
+    def clone : self
+      dup
     end
   end
 
@@ -119,6 +134,13 @@ module CRXML
       end
       io << '\n'
     end
+
+    def clone : self
+      copy = dup
+      copy.@children.clear
+      each_child { |child| copy.append(child.clone) }
+      copy
+    end
   end
 
   class NotationDecl < Node
@@ -142,6 +164,10 @@ module CRXML
         s.inspect(io)
       end
       io << '\n'
+    end
+
+    def clone : self
+      dup
     end
   end
 end
