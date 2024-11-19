@@ -59,7 +59,7 @@ ARGV.sort.each do |path|
   puts
   File.open(path) do |file|
     document = CRXML.parse_xml(file,
-                               include_external_entities: false,
+                               external: false,
                                options: CRXML::Options::WellFormed)
   rescue ex
     print_parse_error(path, ex)

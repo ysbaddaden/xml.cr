@@ -5,7 +5,7 @@ module CRXML::DOM
   struct XMLParser
     getter document : XMLDocument
 
-    def initialize(@lexer : Lexer)
+    def initialize(@lexer : Lexer, @external = false)
       @document = XMLDocument.new
 
       # Prolog
@@ -136,7 +136,9 @@ module CRXML::DOM
         when Lexer::Text
           parent.append(Text.new(token.data, @document))
         when Lexer::EntityRef
-          process_entity(token, external: true) { |node| parent.append(node) }
+          process_entity(token, external: @external) do |node|
+            parent.append(node)
+          end
         when Lexer::Comment
           parent.append(Comment.new(token.data, @document))
         when Lexer::PI
@@ -232,18 +234,5 @@ module CRXML::DOM
         entity_recursion_check.delete(key)
       end
     end
-
-    private def dirname : String
-    end
-
-    # private def include_path
-    #   if path = @include_path
-    #     path
-    #   elsif (io = @lexer.@io).responds_to?(:path)
-    #     @include_path = File.expand_path(File.dirname(io.path))
-    #   else
-    #     raise RuntimeError.new("Can't parse XML external entity without an include path")
-    #   end
-    # end
   end
 end

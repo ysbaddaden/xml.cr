@@ -55,7 +55,7 @@ end
 
 document =
   File.open("xmlconf/xmlconf.xml") do |file|
-    CRXML.parse_xml(file, include_external_entities: true)
+    CRXML.parse_xml(file, external: true)
   end
 
 puts %(require "./spec_helper")

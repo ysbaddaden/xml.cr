@@ -13,11 +13,19 @@ module CRXML
   class DOMError < Exception
   end
 
-  def self.parse_xml(string : String, **options) : Document
-    DOM::XMLParser.new(Lexer.new(string, **options)).document
+  def self.parse_xml(
+    string : String,
+    external = false,
+    options : Options = Options::None,
+  ) : XMLDocument
+    DOM::XMLParser.new(Lexer.new(string, options), external).document
   end
 
-  def self.parse_xml(io : IO, **options) : Document
-    DOM::XMLParser.new(Lexer.new(io, **options)).document
+  def self.parse_xml(
+    io : IO,
+    external = false,
+    options : Options = Options::None,
+  ) : XMLDocument
+    DOM::XMLParser.new(Lexer.new(io, options), external).document
   end
 end
