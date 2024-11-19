@@ -61,8 +61,8 @@ module CRXML::DOM
         when "version"
           @document.version = attr.value
         when "encoding"
+          @lexer.set_encoding(attr.value) unless @lexer.encoding?
           @document.encoding = attr.value
-          @lexer.set_encoding(attr.value)
         when "standalone"
           @document.standalone = attr.value
         else
@@ -74,6 +74,25 @@ module CRXML::DOM
 
     private def parse_xmldecl?(token : Lexer::Token?)
       false
+    end
+
+    # TODO: well-formed: the attributes are ordered: [version] [encoding]
+    private def parse_textdecl?(token : Lexer::XMLDecl)
+      version = encoding = nil
+
+      while attr = @lexer.next_xmldecl_token?
+        case attr.name
+        when "version"
+          version = attr.value
+        when "encoding"
+          encoding = attr.value
+          @lexer.set_encoding(encoding) unless @lexer.encoding?
+        else
+          raise ParserError.new("Unexpected attribute #{attr.name} in TextDecl", attr.start_location)
+        end
+      end
+
+      {version, encoding}
     end
 
     private def parse_doctype(token : Lexer::Doctype)
@@ -121,13 +140,15 @@ module CRXML::DOM
         end
       end
 
-      parse_content(parent: element)
+      parse_content(element)
     end
 
-    private def parse_content(parent)
+    private def parse_content(parent, token = nil)
+      token ||= @lexer.next_token?(skip_s: false)
+
       # TODO: unroll the loop and keep a list of nested elements, so we can
       # try to recover from mismatched elements
-      while token = @lexer.next_token?(skip_s: false)
+      while token
         case token
         when Lexer::STag
           parent.append(parse_element(token))
@@ -151,6 +172,8 @@ module CRXML::DOM
         else
           raise ParserError.new("Unexpected #{token.class.name} in content", token.start_location)
         end
+
+        token = @lexer.next_token?(skip_s: false)
       end
 
       parent
@@ -168,7 +191,8 @@ module CRXML::DOM
               yield EntityRef.new(token.name, @document)
             end
           else
-            raise ParserError.new("Can't reference external entity here", token.start_location)
+            yield EntityRef.new(token.name, @document)
+            # raise ParserError.new("Can't reference external entity here", token.start_location)
           end
         end
         entitydecl.each_child { |child| yield child.clone }
@@ -190,7 +214,7 @@ module CRXML::DOM
       lexer = Lexer.new(IO::Memory.new(entitydecl.value), @lexer.@options)
 
       with_entity_lexer("ge:#{entitydecl.name}", lexer) do
-        parse_content(parent: entitydecl)
+        parse_content(entitydecl)
       end
     end
 
@@ -207,8 +231,14 @@ module CRXML::DOM
         lexer = Lexer.new(file, @lexer.@options)
 
         with_entity_lexer("pe:#{entitydecl.name}", lexer) do
-          # TODO: detect and parse TextDecl, set encoding, ...
-          parse_content(parent: entitydecl)
+          token = @lexer.next_token?(skip_s: @lexer.@options.well_formed?)
+
+          if token.is_a?(Lexer::XMLDecl)
+            _attrs = parse_textdecl?(token)
+            token = nil
+          end
+
+          parse_content(entitydecl, token)
         end
       end
 

@@ -1,9 +1,11 @@
+#! /usr/bin/env -S crystal i
 require "../src/crxml"
 
 def gen_testcase(node, xml_base)
   id = node.attributes["ID"].value
   sections = node.attributes["SECTIONS"].value
   type = node.attributes["TYPE"].value
+  entities = node.attributes["ENTITIES"]?
 
   uri = File.join("xmlconf", xml_base.to_s, node.attributes["URI"].value)
 
@@ -16,7 +18,7 @@ def gen_testcase(node, xml_base)
   puts %(it "#{id} (Section #{sections})" do)
   case type
   when "valid", "invalid"
-    puts %(  document = File.open(#{uri.inspect}) { |file| CRXML.parse_xml(file) })
+    puts %(  document = File.open(#{uri.inspect}) { |file| CRXML.parse_xml(file, external: true) })
     if output
       puts %(  canon = File.open(#{output.inspect}) { |file| CRXML.parse_xml(file) })
       puts %(  assert_equal canon, document, #{message.inspect})

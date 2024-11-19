@@ -2,7 +2,6 @@ require "io/memory"
 require "string_pool"
 require "./lexer/error"
 require "./lexer/ast"
-# require "./lexer/entities"
 
 module CRXML
   @[Flags]
@@ -37,6 +36,8 @@ module CRXML
       new(IO::Memory.new(string), **args)
     end
 
+    getter? encoding : String?
+
     @io : IO
     @replacement_texts : Array({IO, String, Char?})
     @current_char : Char?
@@ -56,6 +57,7 @@ module CRXML
     end
 
     def set_encoding(encoding : String) : Nil
+      @encoding = encoding
       @io.set_encoding(encoding)
     end
 
@@ -72,27 +74,27 @@ module CRXML
 
       case bytes
       when UInt8.static_array(0x00, 0x00, 0xFE, 0xFF)
-        @io.set_encoding("UCS-4BE")
+        set_encoding("UCS-4BE")
         return
       when UInt8.static_array(0xFF, 0xFE, 0x00, 0x00)
-        @io.set_encoding("UCS-4LE")
+        set_encoding("UCS-4LE")
         return
       end
 
       case bytes.to_slice[0, 2]
       when UInt8.static_array(0xFE, 0xFF).to_slice
         @io.seek(2, IO::Seek::Set)
-        @io.set_encoding("UTF-16BE")
+        set_encoding("UTF-16BE")
         return
       when UInt8.static_array(0xFF, 0xFE).to_slice
         @io.seek(2, IO::Seek::Set)
-        @io.set_encoding("UTF-16LE")
+        set_encoding("UTF-16LE")
         return
       end
 
       if bytes.to_slice[0, 3] == UInt8.static_array(0xEF, 0xBB, 0xBF).to_slice
         @io.seek(3, IO::Seek::Set)
-        @io.set_encoding("UTF-8")
+        set_encoding("UTF-8")
         return
       end
 
@@ -100,13 +102,13 @@ module CRXML
 
       case bytes
       when UInt8.static_array(0x00, 0x00, 0x00, 0x3C)
-        @io.set_encoding("UCS-4BE")
+        set_encoding("UCS-4BE")
       when UInt8.static_array(0x3C, 0x00, 0x00, 0x00)
-        @io.set_encoding("UCS-4LE")
+        set_encoding("UCS-4LE")
       when UInt8.static_array(0x00, 0x3C, 0x00, 0x3F)
-        @io.set_encoding("UTF-16BE")
+        set_encoding("UTF-16BE")
       when UInt8.static_array(0x3C, 0x00, 0x3F, 0x00)
-        @io.set_encoding("UTF-16LE")
+        set_encoding("UTF-16LE")
       when UInt8.static_array(0x3C, 0x3F, 0x78, 0x6D)
         # ASCII, ISO 646, UTF-8: we can keep reading with the default UTF-8
       end

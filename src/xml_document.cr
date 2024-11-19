@@ -1,8 +1,8 @@
 module CRXML
   class XMLDocument < Document
     property version : String
-    property encoding : String?
-    property standalone : String?
+    property? encoding : String?
+    property? standalone : String?
 
     def initialize(@version = "1.0", @encoding = nil, @standalone = nil)
       super()
