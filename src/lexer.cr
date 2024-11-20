@@ -29,11 +29,12 @@ module CRXML
       Never
 
       # Usually normalize, but keep lone CR. For example CRLF becomes LF but CR
-      # is kept. This is the default.
+      # is kept. This is the default for XML 1.0.
       Partial
 
       # Always normalize. For example both CRLF and LF become LF.
-      # Used when parsing external entities.
+      # Used when parsing external entities. Must be set as soon as we detect
+      # XML 1.1.
       Always
     end
 
@@ -48,8 +49,11 @@ module CRXML
     @current_char : Char?
     @peek_char : Char?
     @peek_peek_char : Char?
-    getter options : Options
     getter location : Location
+
+    property options : Options
+    property normalize_eol : NormalizeEOL
+    property recognize_pe : Bool
 
     # Reference to the parser to parse parameter/general entities, for example
     # in attvalue.
@@ -57,7 +61,10 @@ module CRXML
     # property? parser : DOM::XMLParser = nil
 
     # TODO: option to skip over comments (don't allocate as strings)
-    def initialize(@io : IO, @options : Options = :none, @normalize_eol : NormalizeEOL = :partial)
+    def initialize(@io : IO,
+        @options : Options = :none,
+        @normalize_eol : NormalizeEOL = :partial,
+        @recognize_pe = false)
       @buf = IO::Memory.new
       @pool = StringPool.new
       @location = Location.new(1, 0)
@@ -188,9 +195,24 @@ module CRXML
             data = lex_comment
             Comment.new(data, start_location, @location)
           else
-            expect("DOCTYPE")
-            expect_s
-            lex_doctype(start_location)
+            # only DOCTYPE should happen, unless we're parsing a PE
+            case expect("DOCTYPE", "ATTLIST", "ELEMENT", "ENTITY", "NOTATION")
+            when "DOCTYPE"
+              expect_s
+              lex_doctype(start_location)
+            when "ATTLIST"
+              expect_s
+              lex_attlistdecl(start_location)
+            when "ELEMENT"
+              expect_s
+              lex_elementdecl(start_location)
+            when "ENTITY"
+              expect_s
+              lex_entitydecl(start_location)
+            when "NOTATION"
+              expect_s
+              lex_notationdecl(start_location)
+            end
           end
         else
           name = lex_name
@@ -206,11 +228,16 @@ module CRXML
           expect(';') # TODO: recoverable
           EntityRef.new(name, start_location, @location)
         end
-      #when '%'
-      #  next_char
-      #  name = lex_name
-      #  expect(';') # TODO: recoverable
-      #  PEReference.new(name, start_location, @location)
+      when '%'
+        if @recognize_pe
+          next_char
+          name = lex_name
+          expect(';') # TODO: recoverable
+          PEReference.new(name, start_location, @location)
+        else
+          data = lex_text
+          Text.new(data, start_location, @location)
+        end
       when nil
         # reached EOF
       else
@@ -717,7 +744,8 @@ module CRXML
             end
           end
 
-          if char == '&'
+          case char
+          when '&'
             if peek_char == '#'
               normalize_char_ref(str)
               next
@@ -725,6 +753,8 @@ module CRXML
               # entityref: abort
               break
             end
+          when '%'
+            break if @recognize_pe
           end
 
           str << char
@@ -967,14 +997,15 @@ module CRXML
       unless @normalize_eol.never?
         if current_char == '\r'
           peek_char ||= @io.read_char
+
           if StaticArray['\n', '\u0085'].includes?(peek_char)
-            peek_char = nil
+            peek_char = nil if @normalize_eol.always?
             current_char = '\n'
-          elsif @normalize_eol.always?
+          elsif @normalize_eol.always? || peek_char == '\u2028'
             current_char = '\n'
           end
         elsif StaticArray['\u0085', '\u2028'].includes?(current_char)
-          current_char = '\n'
+          current_char = '\n' if @normalize_eol.always?
         end
       end
       {current_char, peek_char}

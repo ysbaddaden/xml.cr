@@ -67,6 +67,7 @@ module CRXML::DOM
       while attr = @lexer.next_xmldecl_token?
         case attr.name
         when "version"
+          @lexer.normalize_eol = :always if attr.value == "1.1"
           @document.version = attr.value
         when "encoding"
           @lexer.set_encoding(attr.value) unless @lexer.encoding?
@@ -127,7 +128,9 @@ module CRXML::DOM
           when Lexer::PI
             doctype.append(ProcessingInstruction.new(token.name, token.data, @document))
           when Lexer::PEReference
-            # TODO: process PEReference
+            process_parameter_entity(token.name, token.start_location) do |node|
+              doctype.append(node)
+            end
           else
             raise ParserError.new("Unexpected #{token.class.name} in DOCTYPE", token.start_location)
           end
@@ -172,40 +175,93 @@ module CRXML::DOM
       str << '&' << ref.name << ';'
     end
 
-    private def parse_content(parent, token = nil)
+    private def parse_entity_content(parent, token = nil)
       token ||= @lexer.next_token?(skip_s: false)
 
-      # TODO: unroll the loop and keep a list of nested elements, so we can
-      # try to recover from mismatched elements
+      # TODO: keep a list of nested elements, so we can try to recover from
+      # mismatched elements
       while token
         case token
-        when Lexer::STag
-          parent.append(parse_element(token.name))
-        when Lexer::CDATA
-          parent.append(CDataSection.new(token.data, @document))
-        when Lexer::Text
-          parent.append(Text.new(token.data, @document))
-        when Lexer::EntityRef
-          process_general_entity(token.name, token.start_location, external: @external) do |node|
+        when Lexer::PEReference
+          # only possible if the lexer has been told to recognize PEReference
+          process_parameter_entity(token.name, token.start_location) do |node|
             parent.append(node.clone)
           end
-        when Lexer::Comment
-          parent.append(Comment.new(token.data, @document))
-        when Lexer::PI
-          parent.append(ProcessingInstruction.new(token.name, token.data, @document))
-        when Lexer::ETag
-          unless parent.is_a?(Element) && (token.name == parent.name)
-            raise ParserError.new("Element mismatch", token.start_location)
-          end
-          break
+        when Lexer::AttlistDecl
+          attlistdecl = AttlistDecl.new(token.name, token.defs, @document)
+          @document.doctype.append(attlistdecl)
+        when Lexer::ElementDecl
+          @document.doctype.append(ElementDecl.new(token.name, token.content, @document))
+        when Lexer::EntityDecl
+          entitydecl = EntityDecl.new(token.parameter, token.name, token.value, token.public_id, token.system_id, token.notation_id, @document)
+          @document.doctype.append(entitydecl)
+        when Lexer::NotationDecl
+          notationdecl = NotationDecl.new(token.name, token.public_id, token.system_id, @document)
+          @document.doctype.append(notationdecl)
         else
-          raise ParserError.new("Unexpected #{token.class.name} in content", token.start_location)
+          parse_markup(parent, token)
         end
-
         token = @lexer.next_token?(skip_s: false)
       end
 
       parent
+    end
+
+    # TODO: keep a list of nested elements, so we can try to recover from
+    # mismatched elements
+    private def parse_content(parent)
+      while token = @lexer.next_token?(skip_s: false)
+        parse_markup(parent, token)
+        break if token.is_a?(Lexer::ETag)
+      end
+      parent
+    end
+
+    private def parse_markup(parent, token)
+      case token
+      when Lexer::STag
+        parent.append(parse_element(token.name))
+      when Lexer::CDATA
+        parent.append(CDataSection.new(token.data, @document))
+      when Lexer::Text
+        parent.append(Text.new(token.data, @document))
+      when Lexer::EntityRef
+        process_general_entity(token.name, token.start_location, external: @external) do |node|
+          parent.append(node.clone)
+        end
+      when Lexer::Comment
+        parent.append(Comment.new(token.data, @document))
+      when Lexer::PI
+        parent.append(ProcessingInstruction.new(token.name, token.data, @document))
+      when Lexer::ETag
+        unless parent.is_a?(Element) && (token.name == parent.name)
+          raise ParserError.new("Element mismatch", token.start_location)
+        end
+      else
+        raise ParserError.new("Unexpected #{token.class.name} in content", token.start_location)
+      end
+    end
+
+    # TODO: almost identical to #process_general_entity
+    protected def process_parameter_entity(name : String, location : Lexer::Location) : Nil
+      if entitydecl = find_entity_declaration(name)
+        if entitydecl.value?
+          parse_internal_entity(entitydecl)
+        elsif !@external || !parse_external_entity?(entitydecl)
+          yield PEReference.new(name, @document, location)
+        end
+
+        entitydecl.each_child do |child|
+          yield child
+        end
+        return
+      end
+
+      if @lexer.@options.well_formed?
+        raise ParserError.new("Unknown entity", location)
+      else
+        yield PEReference.new(name, @document, location)
+      end
     end
 
     protected def process_general_entity(name : String, location : Lexer::Location, external = false, &) : Nil
@@ -247,16 +303,20 @@ module CRXML::DOM
 
     private def parse_internal_entity(entitydecl)
       # TODO: set initial lexer location to entitydecl value position
-      lexer = Lexer.new(IO::Memory.new(entitydecl.value), @lexer.@options, normalize_eol: :never)
+      lexer = Lexer.new(IO::Memory.new(entitydecl.value), @lexer.@options,
+                        normalize_eol: :never,
+                        recognize_pe: true)
 
       with_entity_lexer("ge:#{entitydecl.name}", lexer) do
-        parse_content(entitydecl)
+        parse_entity_content(entitydecl)
       end
     end
 
     private def parse_attr_internal_entity(str, entitydecl)
       # TODO: set initial lexer location to entitydecl value position
-      lexer = Lexer.new(IO::Memory.new(entitydecl.value), @lexer.@options, normalize_eol: :never)
+      lexer = Lexer.new(IO::Memory.new(entitydecl.value), @lexer.@options,
+                        normalize_eol: :never,
+                        recognize_pe: true)
 
       with_entity_lexer("ge:#{entitydecl.name}", lexer) do
         @lexer.lex_attvalue_chars(str) { |s, ref| process_attr_entity(s, ref) }
@@ -283,7 +343,7 @@ module CRXML::DOM
             token = nil
           end
 
-          parse_content(entitydecl, token)
+          parse_entity_content(entitydecl, token)
         end
       end
 
