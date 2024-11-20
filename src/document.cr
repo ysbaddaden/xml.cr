@@ -68,5 +68,13 @@ module CRXML
 
       copy
     end
+
+    def normalize : Nil
+      @root.try(&.normalize)
+    end
+
+    def canonicalize : Nil
+      @root.try(&.canonicalize)
+    end
   end
 end

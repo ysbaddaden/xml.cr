@@ -1,4 +1,4 @@
-#! /usr/bin/env -S crystal i
+#! /usr/bin/env -S crystal i --
 require "../src/crxml"
 require "colorize"
 
@@ -55,6 +55,8 @@ abort "fatal: missing argument" if ARGV.empty?
 
 options = CRXML::Options::WellFormed
 external = true
+normalize = false
+canonicalize = false
 
 if ARGV.includes?("--wf=no")
   ARGV.delete("--wf=no")
@@ -66,12 +68,27 @@ if ARGV.includes?("--external=no")
   external = false
 end
 
+if ARGV.includes?("--normalize")
+  ARGV.delete("--normalize")
+  normalize = true
+end
+
+if ARGV.includes?("--canonicalize")
+  ARGV.delete("--canonicalize")
+  canonicalize = true
+end
+
 ARGV.sort.each do |path|
   puts
   puts "Parsing #{path} ..."
   puts
   File.open(path) do |file|
     document = CRXML.parse_xml(file, external: external, options: options)
+    if normalize
+      document.normalize
+    elsif canonicalize
+      document.canonicalize
+    end
   rescue ex
     print_parse_error(path, ex)
     puts

@@ -32,6 +32,12 @@ module CRXML
     def clone : self
       dup
     end
+
+    def normalize
+    end
+
+    def canonicalize
+    end
   end
 
   class Text < CharacterData

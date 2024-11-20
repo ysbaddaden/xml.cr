@@ -78,8 +78,83 @@ module CRXML
     def text_content(str : String::Builder) : Nil
     end
 
-    # def normalize : Nil
-    # end
+    # Merges contiguous text nodes into a single node.
+    # Applies to the whole subtree.
+    def normalize : Nil
+      return unless node = @children.head
+      text : Text? = nil
+
+      while node
+        next_sibling = node.next_sibling?
+
+        if node.is_a?(Text)
+          if text
+            # merge contiguous text nodes
+            text.data += node.data
+
+            # remove now obsolete node
+            text.next_sibling = next_sibling
+            next_sibling.previous_sibling = node if next_sibling
+            node.link(nil, nil, nil)
+          else
+            text = node
+          end
+        else
+          node.normalize
+          text = nil
+        end
+
+        node = next_sibling
+      end
+    end
+
+    # Replaces cdata sections with a text node.
+    # Merges contiguous text nodes into a single node.
+    # Removes comment nodes.
+    # Applies to the whole subtree.
+    def canonicalize : Nil
+      return unless node = @children.head
+      text : Text? = nil
+
+      while node
+        next_sibling = node.next_sibling?
+
+        case node
+        when Text
+          if text
+            # merge contiguous text nodes
+            text.data += node.data
+
+            # remove now obsolete node
+            text.next_sibling = next_sibling
+            next_sibling.previous_sibling = node if next_sibling
+            node.link(nil, nil, nil)
+          else
+            text = node
+          end
+        when CDataSection
+          if text
+            # merge contiguous text nodes
+            text.data += node.data
+
+            # remove now obsolete node
+            text.next_sibling = next_sibling
+            next_sibling.previous_sibling = node if next_sibling
+            node.link(nil, nil, nil)
+          else
+            text = Text.new(node.data, node.owner_document)
+            self.replace_child(node, child: text)
+          end
+        when Comment
+          self.remove_child(node)
+        else
+          node.canonicalize
+          text = nil
+        end
+
+        node = next_sibling
+      end
+    end
 
     # def clone_node(deep = false) : Node
     #   deep ? clone : dup
@@ -143,8 +218,17 @@ module CRXML
       after.next_sibling = node
     end
 
-    # def replace_child(node : Node, *, child : Node) : Nil
-    # end
+    def replace_child(node : Node, *, child : Node) : Nil
+      raise DOMError.new("not a child of node") unless node.parent_node?.try(&.same?(self))
+
+      # insert child in place of the node
+      child.link(self, node.previous_sibling?, node.next_sibling?)
+      @children.head = child unless node.previous_sibling?
+      @children.tail = child unless node.next_sibling?
+
+      # unlink replaced node
+      node.link(nil, nil, nil)
+    end
 
     def remove_child(node : Node) : Nil
       raise DOMError.new("not a child of node") unless node.parent_node?.try(&.same?(self))

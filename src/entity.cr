@@ -16,6 +16,12 @@ module CRXML
     def clone : self
       dup
     end
+
+    def normalize
+    end
+
+    def canonicalize
+    end
   end
 
   class PEReference < Node
@@ -34,6 +40,12 @@ module CRXML
 
     def clone : self
       dup
+    end
+
+    def normalize
+    end
+
+    def canonicalize
     end
   end
 end
