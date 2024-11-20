@@ -82,4 +82,20 @@ describe CRXML::DOM::XMLParser do
     assert_instance_of Element, node
     assert_equal "foo", node.as(Element).name
   end
+
+  it "re-parses internal entity" do
+    document = XMLParser.new(Lexer.new(<<-XML)).document
+    <!DOCTYPE doc [
+      <!ENTITY example "<p>An ampersand (&#38;#38;) may be escaped
+    numerically (&#38;#38;#38;) or with a general entity
+    (&amp;amp;).</p>" >
+    ]>
+    <doc>&example;</doc>
+    XML
+
+    p = document.root.first_child
+    assert_instance_of Element, p
+    assert_equal "p", p.as(Element).name
+    assert_equal "An ampersand (&) may be escaped\nnumerically (&#38;) or with a general entity\n(&amp;).", p.text_content
+  end
 end

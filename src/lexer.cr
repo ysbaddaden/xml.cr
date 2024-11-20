@@ -22,6 +22,21 @@ module CRXML
   # (e.g. in text or entitydecl value), but entity refs shall only be normalized
   # when processed as text.
   class Lexer
+    enum NormalizeEOL
+      # Never normalize end-of-lines. For example keep CRLF and CR as is.
+      # Used when parsing internal entities since the parsing the entitydecl
+      # value already normalized.
+      Never
+
+      # Usually normalize, but keep lone CR. For example CRLF becomes LF but CR
+      # is kept. This is the default.
+      Partial
+
+      # Always normalize. For example both CRLF and LF become LF.
+      # Used when parsing external entities.
+      Always
+    end
+
     def self.new(string : String, **args)
       new(IO::Memory.new(string), **args)
     end
@@ -42,7 +57,7 @@ module CRXML
     # property? parser : DOM::XMLParser = nil
 
     # TODO: option to skip over comments (don't allocate as strings)
-    def initialize(@io : IO, @options : Options = :none)
+    def initialize(@io : IO, @options : Options = :none, @normalize_eol : NormalizeEOL = :partial)
       @buf = IO::Memory.new
       @pool = StringPool.new
       @location = Location.new(1, 0)
@@ -52,6 +67,8 @@ module CRXML
     end
 
     def set_encoding(encoding : String) : Nil
+      # FIXME: changing the encoding while we already have read a
+      # `@current_char` may lead to invalid reads afterwards.
       @encoding = encoding
       @io.set_encoding(encoding)
     end
@@ -521,48 +538,59 @@ module CRXML
     private def lex_attvalue(quote, &)
       String.build do |str|
         loop do
-          case char = current_char
-          when quote
+          if current_char == quote
             next_char
             break
-          when '<'
-            next_char
-            if @options.well_formed?
-              raise SyntaxError.new("Attribute value cannot contain a literal '<'", @location)
-            else
-              str << '<'
-            end
-          when '&'
-            if peek_char == '#'
-              normalize_char_ref(str)
-            elsif @options.well_formed?
-              start_location = @location
-              next_char
-              name = lex_name
-              expect(';')
-              yield str, EntityRef.new(name, start_location, @location)
-            else
-              start_location = @location
-              unless s?(next_char)
-                name = lex_name
-                if current_char == ';'
-                  next_char
-                  yield str, EntityRef.new(name, start_location, @location)
-                  next
-                end
-                str << '&'
-                str << name
-                next
-              end
-              str << '&'
-              next_char
-            end
-          else
-            # normalize space
-            str << (s?(char) ? ' ' : char)
-            next_char
           end
+          lex_attvalue_char(str) { |s, token| yield s, token }
         end
+      end
+    end
+
+    def lex_attvalue_chars(str : String::Builder, &) : Nil
+      while char = @current_char
+        lex_attvalue_char(str) { |s, token| yield s, token }
+      end
+    end
+
+    private def lex_attvalue_char(str : String::Builder, &) : Nil
+      case char = current_char
+      when '<'
+        next_char
+        if @options.well_formed?
+          raise SyntaxError.new("Attribute value cannot contain a literal '<'", @location)
+        else
+          str << '<'
+        end
+      when '&'
+        if peek_char == '#'
+          normalize_char_ref(str)
+        elsif @options.well_formed?
+          start_location = @location
+          next_char
+          name = lex_name
+          expect(';')
+          yield str, EntityRef.new(name, start_location, @location)
+        else
+          start_location = @location
+          unless s?(next_char)
+            name = lex_name
+            if current_char == ';'
+              next_char
+              yield str, EntityRef.new(name, start_location, @location)
+              return
+            end
+            str << '&'
+            str << name
+            return
+          end
+          str << '&'
+          next_char
+        end
+      else
+        # normalize space
+        str << (s?(char) ? ' ' : char)
+        next_char
       end
     end
 
@@ -587,9 +615,18 @@ module CRXML
             # TODO: process PEReference
             str << '%'
             next_char
+          #when '\r'
+          #  if peek_char == '\n'
+          #    next_char
+          #    str << '\n'
+          #  else
+          #    str << '\r'
+          #  end
+          #  next_char
           else
-            # normalize space
-            str << (s?(char) ? ' ' : char)
+            # normalize space (?)
+            # str << (s?(char) ? ' ' : char)
+            str << char
             next_char
           end
         end
@@ -816,38 +853,6 @@ module CRXML
       end
     end
 
-    # https://www.w3.org/TR/xml11/#AVNormalize
-    # https://www.w3.org/TR/xml11/#entproc
-    #
-    # - +include_pe+: set to true to recognize and include parameter entities (e.g. ENTITY %);
-    # - +include_entity+: set to true to recognize and include entities (e.g. ENTITY);
-    # - +normalize_s+: set to true to replace whitespaces with a single space (e.g. ATTVALUE);
-    # - +merge_s+: set to true to group whitespaces (e.g. NMTOKENS);
-    # - +process_entity+: set to true to process the replacement text of entities (e.g. CONTENT).
-    #private def normalize_to(str, char, include_pe = false, include_entity = false, normalize_s = false, merge_s = false, &)
-    #  if char == '&'
-    #    if next_char == '#'
-    #      if next_char == 'x'
-    #        next_char
-    #        normalize_hexadecimal_char_ref(str)
-    #      else
-    #        normalize_decimal_char_ref(str)
-    #      end
-    #    else
-    #      normalize_entity_ref(str) { |entity_ref| yield entity_ref }
-    #    end
-    #  elsif include_pe && char == '%'
-    #    normalize_pe_reference(str)
-    #  elsif s?(char)
-    #    skip_s if merge_s
-    #    str << (normalize_s ? ' ' : char)
-    #    next_char
-    #  else
-    #    str << char
-    #    next_char
-    #  end
-    #end
-
     private def normalize_char_ref(str)
       expect('&')
       expect('#')
@@ -924,55 +929,6 @@ module CRXML
       @buf.clear
     end
 
-    # NOTE: DEPRECATED
-    private def normalize_entity_ref(str, & : EntityRef ->)
-      start_location = @location.adjust(column: -1)
-      name = lex_name
-
-      if current_char == ';'
-        next_char
-
-        if value = PREDEFINED_ENTITIES[name]?
-          str << value
-          return
-        else
-          yield EntityRef.new(name, start_location, @location)
-        end
-
-        # if @options.well_formed?
-        #   raise ValidationError.new("Unknown entity", @location.adjust(column: -1 - name.size))
-        # end
-      elsif @options.well_formed?
-        expect(';')
-      else
-        str << '&' << name
-      end
-    end
-
-    # NOTE: DEPRECATED
-    private def normalize_pe_reference(str)
-      name = lex_name
-
-      if current_char == ';'
-        next_char
-
-        # if value = @parameter_entities.try(&.fetch(name) { nil })
-        #   str << value
-        #   return
-        # end
-
-        # if @options.well_formed?
-        #   raise ValidationError.new("Unknown parameter entity", @location.adjust(column: -2 - name.size))
-        # end
-
-        str << '%' << name << ';'
-      elsif @options.well_formed?
-        expect(';')
-      else
-        str << '%' << name
-      end
-    end
-
     private def peek_char : Char?
       if char = @peek_char
         char
@@ -980,15 +936,17 @@ module CRXML
         @peek_peek_char = nil
         @peek_char = char
       elsif char = @io.read_char
-        char, @peek_peek_char = normalize_line_endings(char)
+        char, @peek_peek_char = normalize_line_endings(char, @peek_peek_char)
         @peek_char = char
-      else
-        raise SyntaxError.new("Reached EOF", @location)
       end
     end
 
     private def current_char : Char
       @current_char || raise SyntaxError.new("Reached EOF", @location)
+    end
+
+    def current_char? : Char?
+      @current_char
     end
 
     private def next_char : Char?
@@ -998,20 +956,26 @@ module CRXML
         char = @io.read_char
       end
 
-      char, @peek_char = normalize_line_endings(char)
+      char, @peek_char = normalize_line_endings(char, @peek_char)
       @location.update(char) if char
 
       @current_char = char
     end
 
     # https://www.w3.org/TR/xml11/#sec-line-ends
-    private def normalize_line_endings(current_char)
-      if current_char == '\r'
-        peek_char = @io.read_char
-        peek_char = nil if StaticArray['\n', '\u0085'].includes?(peek_char)
-        current_char = '\n'
-      elsif StaticArray['\u0085', '\u2028'].includes?(current_char)
-        current_char = '\n'
+    private def normalize_line_endings(current_char, peek_char = nil)
+      unless @normalize_eol.never?
+        if current_char == '\r'
+          peek_char ||= @io.read_char
+          if StaticArray['\n', '\u0085'].includes?(peek_char)
+            peek_char = nil
+            current_char = '\n'
+          elsif @normalize_eol.always?
+            current_char = '\n'
+          end
+        elsif StaticArray['\u0085', '\u2028'].includes?(current_char)
+          current_char = '\n'
+        end
       end
       {current_char, peek_char}
     end

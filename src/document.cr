@@ -11,7 +11,7 @@ module CRXML
     end
 
     def text_content : String?
-      @root.try(&.text_content(str))
+      @root.try(&.text_content)
     end
 
     # def create_element(name : String) : Element

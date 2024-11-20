@@ -139,18 +139,7 @@ module CRXML::DOM
       element = Element.new(tag_name, @document)
 
       loop do
-        token = @lexer.next_attribute?(element.name) do |str, tok|
-          process_general_entity(tok.name, tok.start_location, external: false) do |node|
-            case node
-            when Text
-              str << node.data
-            when EntityRef
-              str << '&' << node.name << ';'
-            else
-              raise ParserError.new("Invalid entity content for attribute value", tok.start_location)
-            end
-          end
-        end
+        token = @lexer.next_attribute?(element.name) { |str, ref| process_attr_entity(str, ref) }
         break unless token
 
         case token
@@ -163,6 +152,24 @@ module CRXML::DOM
       end
 
       parse_content(element)
+    end
+
+    private def process_attr_entity(str, ref) : Nil
+      if text = PREDEFINED_ENTITIES[ref.name]?
+        str << text
+        return
+      end
+
+      if (entitydecl = find_entity_declaration(ref.name)) && entitydecl.internal?
+        parse_attr_internal_entity(str, entitydecl)
+        return
+      end
+
+      if @lexer.@options.well_formed?
+        raise ParserError.new("Unexpected entity", ref.start_location)
+      end
+
+      str << '&' << ref.name << ';'
     end
 
     private def parse_content(parent, token = nil)
@@ -200,10 +207,6 @@ module CRXML::DOM
 
       parent
     end
-
-    # def process_general_entity(ref : EntityRef, external = false)
-    #   process_general_entity(ref.name, ref.location, external) { |node| yield node }
-    # end
 
     protected def process_general_entity(name : String, location : Lexer::Location, external = false, &) : Nil
       if text = PREDEFINED_ENTITIES[name]?
@@ -244,10 +247,19 @@ module CRXML::DOM
 
     private def parse_internal_entity(entitydecl)
       # TODO: set initial lexer location to entitydecl value position
-      lexer = Lexer.new(IO::Memory.new(entitydecl.value), @lexer.@options)
+      lexer = Lexer.new(IO::Memory.new(entitydecl.value), @lexer.@options, normalize_eol: :never)
 
       with_entity_lexer("ge:#{entitydecl.name}", lexer) do
         parse_content(entitydecl)
+      end
+    end
+
+    private def parse_attr_internal_entity(str, entitydecl)
+      # TODO: set initial lexer location to entitydecl value position
+      lexer = Lexer.new(IO::Memory.new(entitydecl.value), @lexer.@options, normalize_eol: :never)
+
+      with_entity_lexer("ge:#{entitydecl.name}", lexer) do
+        @lexer.lex_attvalue_chars(str) { |s, ref| process_attr_entity(s, ref) }
       end
     end
 
@@ -261,7 +273,7 @@ module CRXML::DOM
       return false unless File.exists?(path)
 
       File.open(path) do |file|
-        lexer = Lexer.new(file, @lexer.@options)
+        lexer = Lexer.new(file, @lexer.@options, normalize_eol: :always)
 
         with_entity_lexer("ge:#{entitydecl.name}", lexer) do
           token = @lexer.next_token?(skip_s: @lexer.@options.well_formed?)
