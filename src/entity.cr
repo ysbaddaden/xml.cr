@@ -1,8 +1,9 @@
 module CRXML
   class EntityRef < Node
     getter name : String
+    getter location : Lexer::Location
 
-    def initialize(@name, @owner_document)
+    def initialize(@name, @owner_document, @location : Lexer::Location)
     end
 
     def inspect(io : IO, indent = 0) : Nil
@@ -19,8 +20,9 @@ module CRXML
 
   class PEReference < Node
     getter name : String
+    getter location : Lexer::Location
 
-    def initialize(@name, @owner_document)
+    def initialize(@name, @owner_document, @location : Lexer::Location)
     end
 
     def inspect(io : IO, indent = 0) : Nil

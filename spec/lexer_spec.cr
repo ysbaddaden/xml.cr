@@ -163,30 +163,6 @@ describe CRXML::Lexer do
         ], xml: %(<empty value="&#x26;">)
       end
 
-      it "replaces predefined entities" do
-        Lexer::PREDEFINED_ENTITIES.each do |name, char|
-          assert_tokens [
-            {:stag, "empty"},
-            {:attribute, "value", char.to_s},
-          ], xml: %(<empty value="&#{name};">)
-        end
-      end
-
-      # it "doesn't recognize unknown entities" do
-      #   assert_tokens [
-      #     {:stag, "empty"},
-      #     {:attribute, "value", "&unknown;"},
-      #   ], xml: %(<empty value="&unknown;">)
-      # end
-
-      # it "replaces local entities" do
-      #   skip "missing test"
-      # end
-
-      # it "replaces external entities" do
-      #   skip "missing test"
-      # end
-
       it "doesn't recognize parameter entities" do
         assert_tokens [
           {:stag, "empty"},
@@ -219,19 +195,10 @@ describe CRXML::Lexer do
       end
 
       it "tokenizes entity ref" do
-        Lexer::PREDEFINED_ENTITIES.each do |name, char|
-          assert_tokens [{:entity_ref, name}], xml: "&#{name};"
-        end
+        assert_tokens [{:entity_ref, "lt"}], xml: "&lt;"
+        assert_tokens [{:entity_ref, "apos"}], xml: "&apos;"
         assert_tokens [{:entity_ref, "unknown"}], xml: "&unknown;"
       end
-
-      # it "replaces local entities" do
-      #   skip "missing test"
-      # end
-
-      # it "replaces external entities" do
-      #   skip "missing test"
-      # end
 
       it "doesn't recognize parameter entities" do
         assert_tokens [{:text, "%name;"}], xml: "%name;"

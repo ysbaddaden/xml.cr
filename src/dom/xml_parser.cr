@@ -3,13 +3,21 @@ require "../lexer"
 
 module CRXML::DOM
   struct XMLParser
+    PREDEFINED_ENTITIES = {
+      "lt"   => "<",
+      "gt"   => ">",
+      "amp"  => "&",
+      "apos" => "'",
+      "quot" => "\"",
+    }
+
     getter document : XMLDocument
 
     def initialize(@lexer : Lexer, @external = false)
       @document = XMLDocument.new
 
       # Prolog
-      token = @lexer.next_token?(skip_s: @lexer.@options.well_formed?)
+      token = @lexer.next_token?(skip_s: !@lexer.@options.well_formed?)
 
       if parse_xmldecl?(token)
         token = @lexer.next_token?(skip_s: true)
@@ -21,7 +29,7 @@ module CRXML::DOM
           parse_doctype(token)
         when Lexer::STag
           # reached root element
-          document.root = parse_element(token)
+          document.root = parse_element(token.name)
           token = @lexer.next_token?(skip_s: true)
           break
         when Lexer::Comment
@@ -127,10 +135,24 @@ module CRXML::DOM
       end
     end
 
-    private def parse_element(token : Lexer::STag) : Element
-      element = Element.new(token.name, @document)
+    private def parse_element(tag_name : String) : Element
+      element = Element.new(tag_name, @document)
 
-      while token = @lexer.next_attribute?(element.name)
+      loop do
+        token = @lexer.next_attribute?(element.name) do |str, tok|
+          process_general_entity(tok.name, tok.start_location, external: false) do |node|
+            case node
+            when Text
+              str << node.data
+            when EntityRef
+              str << '&' << node.name << ';'
+            else
+              raise ParserError.new("Invalid entity content for attribute value", tok.start_location)
+            end
+          end
+        end
+        break unless token
+
         case token
         when Lexer::Attribute
           element.attributes[token.name] = token.value
@@ -151,14 +173,14 @@ module CRXML::DOM
       while token
         case token
         when Lexer::STag
-          parent.append(parse_element(token))
+          parent.append(parse_element(token.name))
         when Lexer::CDATA
           parent.append(CDataSection.new(token.data, @document))
         when Lexer::Text
           parent.append(Text.new(token.data, @document))
         when Lexer::EntityRef
-          process_entity(token, external: @external) do |node|
-            parent.append(node)
+          process_general_entity(token.name, token.start_location, external: @external) do |node|
+            parent.append(node.clone)
           end
         when Lexer::Comment
           parent.append(Comment.new(token.data, @document))
@@ -179,33 +201,44 @@ module CRXML::DOM
       parent
     end
 
-    private def process_entity(token, external = false, &) : Nil
-      if text = Lexer::PREDEFINED_ENTITIES[token.name]?
+    # def process_general_entity(ref : EntityRef, external = false)
+    #   process_general_entity(ref.name, ref.location, external) { |node| yield node }
+    # end
+
+    protected def process_general_entity(name : String, location : Lexer::Location, external = false, &) : Nil
+      if text = PREDEFINED_ENTITIES[name]?
         yield Text.new(text, @document)
-      elsif entitydecl = find_entity_declaration(token.name)
+        return
+      end
+
+      if entitydecl = find_entity_declaration(name)
         unless entitydecl.first_child?
           if entitydecl.value?
             parse_internal_entity(entitydecl)
-          elsif external
-            unless parse_external_entity?(entitydecl)
-              yield EntityRef.new(token.name, @document)
-            end
-          else
-            yield EntityRef.new(token.name, @document)
-            # raise ParserError.new("Can't reference external entity here", token.start_location)
+          elsif !external || !parse_external_entity?(entitydecl)
+            yield EntityRef.new(name, @document, location)
+            return
           end
         end
-        entitydecl.each_child { |child| yield child.clone }
-      elsif @lexer.@options.well_formed?
-        raise ParserError.new("Unknown entity", token.start_location)
+
+        entitydecl.each_child do |child|
+          yield child
+        end
+        return
+      end
+
+      if @lexer.@options.well_formed?
+        raise ParserError.new("Unknown entity", location)
       else
-        yield EntityRef.new(token.name, @document)
+        yield EntityRef.new(name, @document, location)
       end
     end
 
     private def find_entity_declaration(name)
       @document.doctype?.try(&.each_child do |node|
-        return node if node.is_a?(EntityDecl) && node.name == name
+        if node.is_a?(EntityDecl) && node.name == name
+          return node
+        end
       end)
     end
 
@@ -230,7 +263,7 @@ module CRXML::DOM
       File.open(path) do |file|
         lexer = Lexer.new(file, @lexer.@options)
 
-        with_entity_lexer("pe:#{entitydecl.name}", lexer) do
+        with_entity_lexer("ge:#{entitydecl.name}", lexer) do
           token = @lexer.next_token?(skip_s: @lexer.@options.well_formed?)
 
           if token.is_a?(Lexer::XMLDecl)
@@ -243,10 +276,6 @@ module CRXML::DOM
       end
 
       true
-    end
-
-    private def entity_recursion_check
-      @entity_recursion_check ||= Set(String).new
     end
 
     private def with_entity_lexer(key, lexer, &)
@@ -263,6 +292,10 @@ module CRXML::DOM
         @lexer = original
         entity_recursion_check.delete(key)
       end
+    end
+
+    private def entity_recursion_check
+      @entity_recursion_check ||= Set(String).new
     end
   end
 end

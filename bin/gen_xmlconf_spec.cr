@@ -16,6 +16,7 @@ def gen_testcase(node, xml_base)
   message = node.text_content.gsub(/\s+/, ' ')
 
   puts %(it "#{id} (Section #{sections})" do)
+  puts %(  puts #{uri.inspect})
   case type
   when "valid", "invalid"
     puts %(  document = File.open(#{uri.inspect}) { |file| CRXML.parse_xml(file, external: true) })
@@ -24,8 +25,11 @@ def gen_testcase(node, xml_base)
       puts %(  assert_equal canon, document, #{message.inspect})
     end
   when "not-wf"
-    puts %(  skip)
-    # puts %(  assert_raises(CRXML::Error, #{message.inspect}) { File.open(#{uri.inspect}) { |file| CRXML.parse_xml(file) } })
+    puts %(  assert_raises(CRXML::Error, #{message.inspect}) do)
+    puts %(    File.open(#{uri.inspect}) do |file|)
+    puts %(      CRXML.parse_xml(file, external: true, options: CRXML::Options::WellFormed))
+    puts %(    end)
+    puts %(  end)
   when "error"
     puts %(  skip)
   end

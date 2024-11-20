@@ -51,6 +51,22 @@ module CRXML
 
       def initialize(@parameter, @name, @value, @public_id, @system_id, @notation_id, @start_location, @end_location)
       end
+
+      def general? : Bool
+        !@parameter
+      end
+
+      def internal? : Bool
+        !@value.nil?
+      end
+
+      def external? : Bool
+        !(@public_id.nil? && @system_id.nil?)
+      end
+
+      def unparsed? : Bool
+        !@notation_id.nil?
+      end
     end
 
     struct NotationDecl < Token

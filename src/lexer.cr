@@ -13,9 +13,7 @@ module CRXML
   #
   # The lexer is closer to a SAX (Simple API for XML) parser than a regular
   # tokenizer in that it directly yields :stag, :attribute or :comment tokens,
-  # instead of the smaller `<` or `?>` individual tokens. Most of the XML
-  # normalizations (e.g. end of lines, entities) should have already been
-  # applied, too.
+  # instead of the smaller `<` or `?>` individual tokens.
   #
   # TODO: option to skip comments.
   # TODO: avoid IO#seek (not widely available, trashes buffer).
@@ -24,14 +22,6 @@ module CRXML
   # (e.g. in text or entitydecl value), but entity refs shall only be normalized
   # when processed as text.
   class Lexer
-    PREDEFINED_ENTITIES = {
-      "lt"   => "<",
-      "gt"   => ">",
-      "amp"  => "&",
-      "apos" => "'",
-      "quot" => "\"",
-    }
-
     def self.new(string : String, **args)
       new(IO::Memory.new(string), **args)
     end
@@ -45,6 +35,11 @@ module CRXML
     @peek_peek_char : Char?
     getter options : Options
     getter location : Location
+
+    # Reference to the parser to parse parameter/general entities, for example
+    # in attvalue.
+    # TODO: create a XML::Parser interface
+    # property? parser : DOM::XMLParser = nil
 
     # TODO: option to skip over comments (don't allocate as strings)
     def initialize(@io : IO, @options : Options = :none)
@@ -131,7 +126,7 @@ module CRXML
             yield tok
           end
         when STag
-          while tok = next_attribute?(token.name)
+          while tok = next_attribute?(token.name) { }
             yield tok
             break if tok.is_a?(ETag)
           end
@@ -216,7 +211,11 @@ module CRXML
         nil
       else
         start_location = @location
-        name, value = lex_attribute
+        name = lex_name
+        skip_s
+        expect('=')
+        skip_s
+        value = lex_quoted
         Attribute.new(name, value, start_location, @location)
       end
     end
@@ -337,10 +336,10 @@ module CRXML
           case default = expect("REQUIRED", "IMPLIED", "FIXED")
           when "FIXED"
             expect_s
-            value = lex_attvalue
+            value = lex_quoted
           end
         else
-          value = lex_attvalue
+          value = lex_quoted
         end
 
         defs << DOM::AttDef.new(name, type, enumeration, default, value)
@@ -433,7 +432,7 @@ module CRXML
       NotationDecl.new(name, public_id, system_id, start_location, @location)
     end
 
-    def next_attribute?(name : String) : Token?
+    def next_attribute?(name : String, &) : Token?
       skip_s
 
       case current_char
@@ -447,7 +446,7 @@ module CRXML
         ETag.new(name, start_location, @location)
       else
         start_location = @location
-        name, value = lex_attribute
+        name, value = lex_attribute { |str, token| yield str, token }
         Attribute.new(name, value, start_location, @location)
       end
     end
@@ -482,7 +481,7 @@ module CRXML
       @buf.clear
     end
 
-    def lex_attribute : {String, String?}
+    def lex_attribute(&) : {String, String?}
       name = lex_name
       skip_s
 
@@ -493,7 +492,7 @@ module CRXML
         # TODO: recover: allow missing quotes (end attvalue at whitespace, '>',
         # '/>', '?>', '"' or '\'')
         quote = expect('"', '\'')
-        value = lex_attvalue(quote)
+        value = lex_attvalue(quote) { |str, token| yield str, token }
       elsif @options.well_formed?
         expect('=')
       end
@@ -501,14 +500,25 @@ module CRXML
       {name, value}
     end
 
-    private def lex_attvalue
-      lex_attvalue(expect('"', '\''))
+    private def lex_quoted
+      quote = expect('"', '\'')
+
+      String.build do |str|
+        until (char = current_char) == quote
+          str << char
+          next_char
+        end
+        next_char # quote
+      end
     end
 
-    # TODO: yield on EntityRef
+    private def lex_attvalue(&)
+      lex_attvalue(expect('"', '\'')) { |str, token| yield str, token }
+    end
+
     # TODO: option to skip trailing/ending S (NMTOKENS)
     # TODO: option to merge S (NMTOKENS)
-    private def lex_attvalue(quote)
+    private def lex_attvalue(quote, &)
       String.build do |str|
         loop do
           case char = current_char
@@ -516,15 +526,34 @@ module CRXML
             next_char
             break
           when '<'
+            next_char
             if @options.well_formed?
-              next_char
               raise SyntaxError.new("Attribute value cannot contain a literal '<'", @location)
+            else
+              str << '<'
             end
           when '&'
             if peek_char == '#'
               normalize_char_ref(str)
+            elsif @options.well_formed?
+              start_location = @location
+              next_char
+              name = lex_name
+              expect(';')
+              yield str, EntityRef.new(name, start_location, @location)
             else
-              # TODO: process EntityRef
+              start_location = @location
+              unless s?(next_char)
+                name = lex_name
+                if current_char == ';'
+                  next_char
+                  yield str, EntityRef.new(name, start_location, @location)
+                  next
+                end
+                str << '&'
+                str << name
+                next
+              end
               str << '&'
               next_char
             end

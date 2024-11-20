@@ -53,14 +53,25 @@ end
 
 abort "fatal: missing argument" if ARGV.empty?
 
+options = CRXML::Options::WellFormed
+external = true
+
+if ARGV.includes?("--wf=no")
+  ARGV.delete("--wf=no")
+  options ^= CRXML::Options::WellFormed
+end
+
+if ARGV.includes?("--external=no")
+  ARGV.delete("--external=no")
+  external = false
+end
+
 ARGV.sort.each do |path|
   puts
   puts "Parsing #{path} ..."
   puts
   File.open(path) do |file|
-    document = CRXML.parse_xml(file,
-      external: true,
-      options: CRXML::Options::WellFormed)
+    document = CRXML.parse_xml(file, external: external, options: options)
   rescue ex
     print_parse_error(path, ex)
     puts
