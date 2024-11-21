@@ -996,16 +996,20 @@ module CRXML
     private def normalize_line_endings(current_char, peek_char = nil)
       unless @normalize_eol.never?
         if current_char == '\r'
-          peek_char ||= @io.read_char
-
-          if StaticArray['\n', '\u0085'].includes?(peek_char)
+          case peek_char ||= @io.read_char
+          when '\n'
+            peek_char = nil
+            current_char = '\n'
+          when '\u0085'
             peek_char = nil if @normalize_eol.always?
             current_char = '\n'
-          elsif @normalize_eol.always? || peek_char == '\u2028'
-            current_char = '\n'
+          when '\u2028'
+            current_char = '\n' unless @normalize_eol.never?
+          else
+            current_char = '\n' if @normalize_eol.always?
           end
-        elsif StaticArray['\u0085', '\u2028'].includes?(current_char)
-          current_char = '\n' if @normalize_eol.always?
+        elsif @normalize_eol.always? && StaticArray['\u0085', '\u2028'].includes?(current_char)
+          current_char = '\n'
         end
       end
       {current_char, peek_char}
