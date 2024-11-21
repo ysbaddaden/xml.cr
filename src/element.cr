@@ -68,10 +68,14 @@ module CRXML
     def inspect(io : IO, indent = 0) : Nil
       indent.times { io << ' ' }
       io << '#' << self.class.name << ' ' << name
-      attributes.each do |attr|
-        io << ' ' << attr.name
-        io << '='
-        attr.value.inspect(io)
+
+      attrs = [] of {String, String}
+      attributes.each { |attr| attrs << {attr.name, attr.value} }
+      attrs.sort_by!(&.first)
+
+      attrs.each do |(name, value)|
+        io << ' ' << name << '='
+        value.inspect(io)
       end
       io << '\n'
       each_child { |child| child.inspect(io, indent + 2) }
