@@ -20,7 +20,7 @@ module XML
     end
 
     def parse : Nil
-      # TODO: detect encoding
+      @chars.autodetect_encoding!
 
       if @chars.consume?('<', '?', 'x', 'm', 'l')
         expect_whitespace
