@@ -353,13 +353,30 @@ module XML
       attributes
     end
 
-    # TODO: CharRef
-    # TODO: EntityRef
     def parse_attr_value : String
       quote = expect '"', '\''
+
+      while char = @chars.current?
+        case char
+        when quote
+          break
+        when '&'
+          if @chars.peek == '#'
+            parse_character_reference
+          else
+            parse_entity_reference
+          end
+        else
+          @buffer << char
+          @chars.consume
+        end
+      end
+
       value = consume_until { |char| char == quote }
       @chars.consume # quote
       value
+    ensure
+      @buffer.clear
     end
 
     def parse_encoding : String
