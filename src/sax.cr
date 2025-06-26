@@ -2,6 +2,11 @@ require "string_pool"
 require "./char_reader"
 require "./chars"
 
+class IO::Memory
+  def bytesize=(@bytesize)
+  end
+end
+
 module XML
   # Simple API for XML.
   class SAX
@@ -10,12 +15,11 @@ module XML
     def initialize(io : IO, @handlers : Handlers)
       @chars = CharReader.new(io)
       @buffer = IO::Memory.new
+      @name_buffer = IO::Memory.new
       @string_pool = StringPool.new
     end
 
     def parse : Nil
-      # skip_whitespace
-
       # TODO: detect encoding
 
       if @chars.consume?('<', '?', 'x', 'm', 'l')
@@ -78,20 +82,81 @@ module XML
     end
 
     def parse_doctype_decl : Nil
-      raise NotImplementedError.new("")
+      system_id = ""
+      public_id = ""
+      intsubset = false
+
+      expect_whitespace
+      name = parse_name
+
+      # expect_whitespace unless @chars.current? == '>'
+      skip_whitespace
+
+      if @chars.consume?('S', 'Y', 'S', 'T', 'E', 'M')
+        expect_whitespace
+        system = parse_system_literal
+      end
+
+      if @chars.consume?('P', 'U', 'B', 'L', 'I', 'C')
+        expect_whitespace
+        public_id = parse_pubid_literal
+      end
+
+      skip_whitespace
+
+      if @chars.current? == '['
+        @chars.consume
+        intsubset = true
+      end
+
+      @handlers.start_doctype_decl(name, system_id, public_id, intsubset)
+
+      if intsubset
+        # TODO: parse *Decl in intsubset
+        while char = @chars.current?
+          break if char == ']'
+          @chars.consume
+        end
+        skip_whitespace
+        expect ']'
+      end
+
+      skip_whitespace
+      expect '>'
+
+      @handlers.end_doctype_decl
+    end
+
+    def parse_system_literal : String
+      quote = expect '"', '\''
+      value = consume_until { |char| char == quote }
+      expect quote
+      value
+    end
+
+    def parse_pubid_literal : String
+      quote = expect '"', '\''
+      value = consume_until do |char|
+        # WF: error unless pubid?(char)
+        char == quote
+      end
+      expect quote
+      value
     end
 
     def parse_processing_instruction : Nil
       target = parse_name
-      if target.compare("xml", case_insensitive: true)
+      if target.compare("xml", case_insensitive: true) == 0
         recoverable_error "PI: reserved prefix #{target.inspect}"
       end
 
-      expect_whitespace
+      # expect_whitespace unless @chars.current == '?'
+      skip_whitespace
 
       data = consume_until do |char|
         char == '?' && @chars.peek == '>'
       end
+      @chars.consume # ?
       @chars.consume # >
 
       @handlers.processing_instruction(target, data)
@@ -109,16 +174,7 @@ module XML
     # TODO: CDATASection
     def parse_content : Nil
       while char = @chars.current?
-        # TODO: CharRef
-        # TODO: EntityRef
-        case char
-        when '<'
-          if @buffer.size > 0
-            # OPTIMIZE: use string pool if all whitespace (likely to be repeated)
-            @handlers.character_data(@buffer.to_s)
-            @buffer.clear
-          end
-
+        if char == '<'
           if @chars.consume?('<', '!', '-', '-')
             parse_comment
           elsif @chars.consume?('<', '!', '[', 'C', 'D', 'A', 'T', 'A', '[')
@@ -130,10 +186,10 @@ module XML
             skip_whitespace
             expect '>'
             @handlers.end_element(name)
-          elsif @chars.consume?('<')
+          else
+            @chars.consume # '<'
             name = parse_name
             attributes = parse_attributes
-
             if @chars.consume?('/', '>')
               @handlers.empty_element(name, attributes)
             else
@@ -141,12 +197,113 @@ module XML
               @handlers.start_element(name, attributes)
             end
           end
-        when '&'
         else
-          # CharData
-          @chars.consume?
-          @buffer << char
+          parse_character_data
         end
+      end
+    end
+
+    def parse_character_data : Nil
+      while char = @chars.current?
+        case char
+        when '<'
+          break
+        when '&'
+          if @chars.peek == '#'
+            parse_character_reference
+          else
+            parse_entity_reference
+          end
+        else
+          @buffer << char
+          @chars.consume
+        end
+      end
+
+      data = @buffer.to_s
+      @buffer.clear
+
+      @handlers.character_data(data)
+    end
+
+    def parse_character_reference : Nil
+      # keep current buffer pos so we can "rewind" on invalid syntax
+      pos = @buffer.pos
+      bytesize = @buffer.bytesize
+      value = 0
+
+      @buffer << @chars.consume # '&'
+      @buffer << @chars.consume # '#'
+
+      if @chars.current? == 'x'
+        @buffer << @chars.consume
+
+        while char = @chars.consume
+          @buffer << char
+
+          case char
+          when '0'..'9'
+            value = value * 16 + (char.ord - '0'.ord)
+          when 'a'..'f'
+            value = value * 16 + (char.ord - 'a'.ord + 10)
+          when 'A'..'F'
+            value = value * 16 + (char.ord - 'A'.ord + 10)
+          when ';'
+            @buffer.pos = pos
+            @buffer.bytesize = bytesize
+            @buffer << value.chr
+            return
+          else
+            break
+          end
+        end
+      else
+        while char = @chars.consume
+          @buffer << char
+
+          case char
+          when '0'..'9'
+            value = value * 10 + (char.ord - '0'.ord)
+          when ';'
+            @buffer.pos = pos
+            @buffer.bytesize = bytesize
+            @buffer << value.chr
+            return
+          else
+            break
+          end
+        end
+      end
+
+      recoverable_error "Invalid character reference"
+    end
+
+    def parse_entity_reference : Nil
+      @chars.consume # '&'
+
+      name = parse_name
+
+      if @chars.current? == ';'
+        @chars.consume
+
+        case name
+        when "lt" then @buffer << '<'
+        when "gt" then @buffer << '>'
+        when "amp" then @buffer << '&'
+        when "apos" then @buffer << '\''
+        when "quot" then @buffer << '"'
+        else
+          # todo: replace General Entity (local)
+          data = @buffer.to_s
+          @buffer.clear
+          @handlers.character_data(data)
+
+          @handlers.entity_reference(name)
+        end
+      else
+        @buffer << '&'
+        @buffer << name
+        recoverable_error "Invalid entity reference"
       end
     end
 
@@ -156,19 +313,20 @@ module XML
     end
 
     def parse_name : String
-      build_string(pool: true) do |str|
-        char = @chars.current
-        unless name_start?(char)
-          fatal_error("Invalid name start char #{char.inspect}")
-        end
-        str << char
-        @chars.consume
+      char = @chars.current
+      fatal_error("Invalid name start char #{char.inspect}") unless name_start?(char)
 
-        while (char = @chars.current?) && name?(char)
-          str << char
-          @chars.consume
-        end
+      @name_buffer << char
+      @chars.consume
+
+      while (char = @chars.current?) && name?(char)
+        @name_buffer << char
+        @chars.consume
       end
+
+      @string_pool.get(@name_buffer.to_slice)
+    ensure
+      @name_buffer.clear
     end
 
     def parse_attributes : Array({String, String})
@@ -237,20 +395,13 @@ module XML
     end
 
     private def consume_until(& : Char -> Bool) : String
-      build_string(pool: false) do |str|
-        until yield(char = @chars.current)
-          str << char
-          @chars.consume
-        end
+      until yield(char = @chars.current)
+        @buffer << char
+        @chars.consume
       end
-    end
-
-    # TODO: use string pool to reduce allocations
-    private def build_string(pool, &)
-      yield @buffer
-      str = pool ? @string_pool.get(@buffer.to_slice) : @buffer.to_s
+      @buffer.to_s
+    ensure
       @buffer.clear
-      str
     end
 
     private def recoverable_error(message : String)
@@ -286,6 +437,9 @@ module XML
       end
 
       def character_data(data : String) : Nil
+      end
+
+      def entity_reference(name : String) : Nil
       end
 
       def comment(data : String) : Nil
