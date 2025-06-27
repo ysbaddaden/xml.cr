@@ -82,8 +82,6 @@ module XML
     end
 
     def parse_doctype_decl : Nil
-      system_id = ""
-      public_id = ""
       intsubset = false
 
       expect_whitespace
@@ -91,17 +89,7 @@ module XML
 
       # expect_whitespace unless @chars.current? == '>'
       skip_whitespace
-
-      if @chars.consume?('S', 'Y', 'S', 'T', 'E', 'M')
-        expect_whitespace
-        system = parse_system_literal
-      end
-
-      if @chars.consume?('P', 'U', 'B', 'L', 'I', 'C')
-        expect_whitespace
-        public_id = parse_pubid_literal
-      end
-
+      public_id, system_id = parse_external_id
       skip_whitespace
 
       if @chars.current? == '['
@@ -111,20 +99,33 @@ module XML
 
       @handlers.start_doctype_decl(name, system_id, public_id, intsubset)
 
-      if intsubset
-        # TODO: parse *Decl in intsubset
-        while char = @chars.current?
-          break if char == ']'
-          @chars.consume
-        end
-        skip_whitespace
-        expect ']'
-      end
+      parse_intsubset if intsubset
 
       skip_whitespace
       expect '>'
 
       @handlers.end_doctype_decl
+    end
+
+    def parse_external_id(loose_system_id = false) : {String?, String?}
+      if @chars.consume?('P', 'U', 'B', 'L', 'I', 'C')
+        expect_whitespace
+        public_id = parse_pubid_literal
+
+        if loose_system_id
+          skip_whitespace
+          if @chars.current? == '"' || @chars.current? == '\''
+            system_id = parse_system_literal
+          end
+        else
+          expect_whitespace
+          system_id = parse_system_literal
+        end
+      elsif @chars.consume?('S', 'Y', 'S', 'T', 'E', 'M')
+        expect_whitespace
+        system_id = parse_system_literal
+      end
+      {public_id, system_id}
     end
 
     def parse_system_literal : String
@@ -142,6 +143,106 @@ module XML
       end
       expect quote
       value
+    end
+
+    def parse_intsubset : Nil
+      loop do
+        skip_whitespace
+
+        case char = @chars.current?
+        when '<'
+          if @chars.consume?('<', '!', 'A', 'T', 'T', 'L', 'I', 'S', 'T')
+            parse_attlist_decl
+          elsif @chars.consume?('<', '!', 'E', 'L', 'E', 'M', 'E', 'N', 'T')
+            parse_element_decl
+          elsif @chars.consume?('<', '!', 'E', 'N', 'T', 'I', 'T', 'Y')
+            parse_entity_decl
+          elsif @chars.consume?('<', '!', 'N', 'O', 'T', 'A', 'T', 'I', 'O', 'N')
+            parse_notation_decl
+          elsif @chars.consume?('<', '?')
+            parse_processing_instruction
+          elsif @chars.consume?('<', '!', '-', '-')
+            parse_comment
+          end
+        when '%'
+          @chars.consume
+          name = parse_name
+          expect ';'
+          # @handlers.entity_ref(name, parameter: true)
+        when ']'
+          @chars.consume
+          break
+        end
+      end
+    end
+
+    # todo: parse AttlistDecl
+    def parse_attlist_decl
+      expect_whitespace
+      name = parse_name
+      skip_whitespace
+      raw_data = consume_until { |char| char == '>' }
+      expect '>'
+      @handlers.raw_attlist_decl(name, raw_data)
+    end
+
+    # todo: parse ElementDecl
+    def parse_element_decl
+      expect_whitespace
+      name = parse_name
+      expect_whitespace
+      raw_data = consume_until { |char| char == '>' }
+      expect '>'
+      @handlers.raw_element_decl(name, raw_data)
+    end
+
+    def parse_entity_decl
+      expect_whitespace
+
+      if @chars.current? == '%'
+        @chars.consume
+        expect_whitespace
+        parameter = true
+      else
+        parameter = false
+      end
+      name = parse_name
+      expect_whitespace
+
+      case @chars.current?
+      when '"', '\''
+        quote = @chars.consume
+        value = consume_until { |char| char == quote }
+        expect quote
+      when 'P', 'S'
+        public_id, system_id = parse_external_id
+        skip_whitespace
+        if @chars.consume?('N', 'D', 'A', 'T', 'A')
+          expect_whitespace
+          ndata = parse_name
+        end
+      end
+
+      skip_whitespace
+      expect '>'
+
+      if value
+        @handlers.entity_decl(name, value, parameter)
+      elsif ndata
+        @handlers.unparsed_entity_decl(name, public_id, system_id, ndata)
+      else
+        @handlers.external_entity_decl(name, public_id, system_id, parameter)
+      end
+    end
+
+    def parse_notation_decl
+      expect_whitespace
+      name = parse_name
+      expect_whitespace
+      public_id, system_id = parse_external_id(loose_system_id: true)
+      skip_whitespace
+      expect '>'
+      @handlers.notation_decl(name, public_id, system_id)
     end
 
     def parse_processing_instruction : Nil
@@ -212,7 +313,12 @@ module XML
           if @chars.peek == '#'
             parse_character_reference
           else
-            parse_entity_reference
+            parse_entity_reference do |name|
+              data = @buffer.to_s
+              @buffer.clear
+              @handlers.character_data(data)
+              @handlers.entity_reference(name)
+            end
           end
         else
           @buffer << char
@@ -278,7 +384,7 @@ module XML
       recoverable_error "Invalid character reference"
     end
 
-    def parse_entity_reference : Nil
+    def parse_entity_reference(&) : Nil
       @chars.consume # '&'
 
       name = parse_name
@@ -294,11 +400,7 @@ module XML
         when "quot" then @buffer << '"'
         else
           # todo: replace General Entity (local)
-          data = @buffer.to_s
-          @buffer.clear
-          @handlers.character_data(data)
-
-          @handlers.entity_reference(name)
+          yield name
         end
       else
         @buffer << '&'
@@ -364,7 +466,11 @@ module XML
           if @chars.peek == '#'
             parse_character_reference
           else
-            parse_entity_reference
+            parse_entity_reference do |name|
+              @buffer << '&'
+              @buffer << name
+              @buffer << ';'
+            end
           end
         else
           @buffer << char
@@ -433,10 +539,30 @@ module XML
       def xml_decl(version : String, encoding : String, standalone : Bool) : Nil
       end
 
-      def start_doctype_decl(name : String, system_id : String, public_id : String, intsubset : Bool)
+      def start_doctype_decl(name : String, system_id : String?, public_id : String?, intsubset : Bool)
       end
 
       def end_doctype_decl : Nil
+      end
+
+      @[Experimental]
+      def raw_attlist_decl(name : String, raw_data : String) : Nil
+      end
+
+      @[Experimental]
+      def raw_element_decl(name : String, raw_data : String) : Nil
+      end
+
+      def entity_decl(name : String, value : String, parameter : Bool) : Nil
+      end
+
+      def external_entity_decl(name : String, public_id : String?, system_id : String?, parameter : Bool) : Nil
+      end
+
+      def unparsed_entity_decl(name : String, public_id : String?, system_id : String?, ndata : String?) : Nil
+      end
+
+      def notation_decl(name : String, public_id : String?, system_id : String?) : Nil
       end
 
       def processing_instruction(target : String, data : String) : Nil
