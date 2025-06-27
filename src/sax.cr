@@ -19,6 +19,7 @@ module XML
       @buffer = IO::Memory.new
       @name_buffer = IO::Memory.new
       @string_pool = StringPool.new
+      @entities = {} of String => EntityDecl
     end
 
     def parse : Nil
@@ -365,9 +366,7 @@ module XML
 
       case @reader.current?
       when '"', '\''
-        quote = @reader.consume
-        value = consume_until { |char| char == quote }
-        expect quote
+        value = parse_entity_value(quote: @reader.consume)
       when 'P', 'S'
         public_id, system_id = parse_external_id
         skip_whitespace
@@ -389,7 +388,41 @@ module XML
           EntityDecl::External.new(name, parameter, public_id, system_id)
         end
 
+      @entities[name] = entity
       @handlers.entity_decl(entity)
+    end
+
+    def parse_entity_value(quote : Char) : String
+      while char = @reader.current?
+        case char
+        when quote
+          @reader.consume
+          break
+        when '&'
+          if @reader.peek == '#'
+            parse_character_reference
+          else
+            # do not process entity ref
+            @reader.consume
+            @buffer << char
+          end
+        when '%'
+          @reader.consume
+          name = parse_name
+          expect ';'
+          if (entity = @entities[name]?) && entity.is_a?(EntityDecl::Internal) && entity.parameter?
+            @buffer << entity.value
+          else
+            @buffer << '%' << name << ';'
+          end
+        else
+          @buffer << char
+          @reader.consume
+        end
+      end
+      value = @buffer.to_s
+      @buffer.clear
+      value
     end
 
     def parse_notation_decl
@@ -429,7 +462,6 @@ module XML
       @handlers.comment(data)
     end
 
-    # TODO: CDATASection
     def parse_content : Nil
       while char = @reader.current?
         if char == '<'
@@ -556,8 +588,12 @@ module XML
         when "apos" then @buffer << '\''
         when "quot" then @buffer << '"'
         else
-          # todo: replace General Entity (local)
-          yield name
+          if (entity = @entities[name]?) && entity.is_a?(EntityDecl::Internal)
+            # TODO: parse entity value as self contained XML
+            @buffer << entity.value
+          else
+            yield name
+          end
         end
       else
         @buffer << '&'
