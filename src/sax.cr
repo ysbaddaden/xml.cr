@@ -1,6 +1,8 @@
 require "string_pool"
 require "./char_reader"
 require "./chars"
+require "./element_decl"
+require "./entity_decl"
 
 class IO::Memory
   def bytesize=(@bytesize)
@@ -8,137 +10,33 @@ class IO::Memory
 end
 
 module XML
-  abstract class ElementDecl
-    enum Quantifier
-      NONE = 0
-      OPTIONAL
-      REPEATED
-      PLUS
-
-      protected def to_char? : Char?
-        case self
-        when OPTIONAL then '?'
-        when REPEATED then '*'
-        when PLUS then '+'
-        end
-      end
-    end
-
-    class Empty < ElementDecl
-      # :nodoc:
-      def inspect(io : IO) : Nil
-        io << "EMPTY"
-      end
-    end
-
-    class Any < ElementDecl
-      # :nodoc:
-      def inspect(io : IO) : Nil
-        io << "ANY"
-      end
-    end
-
-    class Mixed < ElementDecl
-      getter names : Array(String)
-
-      def initialize(@names)
-      end
-
-      # :nodoc:
-      def inspect(io : IO) : Nil
-        io << "MIXED"
-        return if @names.empty?
-
-        io << '('
-        @names.join(io, '|')
-        io << ')'
-      end
-    end
-
-    abstract class Children < ElementDecl
-      property quantifier : Quantifier
-
-      private def initialize(@quantifier)
-      end
-    end
-
-    class Name < Children
-      property name : String
-
-      def initialize(@quantifier, @name)
-      end
-
-      # :nodoc:
-      def inspect(io : IO) : Nil
-        io << @name
-        io << @quantifier.to_char?
-      end
-    end
-
-    class Choice < Children
-      getter children : Array(Name | Choice | Seq)
-
-      def initialize(@quantifier, @children)
-      end
-
-      # :nodoc:
-      def inspect(io : IO) : Nil
-        io << "CHOICE("
-        @children.each_with_index do |child, index|
-          io << ", " unless index == 0
-          child.inspect(io)
-        end
-        io << ')'
-        io << @quantifier.to_char?
-      end
-    end
-
-    class Seq < Children
-      getter children : Array(Name | Choice | Seq)
-
-      def initialize(@quantifier, @children)
-      end
-
-      # :nodoc:
-      def inspect(io : IO) : Nil
-        io << "SEQ("
-        @children.each_with_index do |child, index|
-          io << ", " unless index == 0
-          child.inspect(io)
-        end
-        io << ')'
-        io << @quantifier.to_char?
-      end
-    end
-  end
-
   # Simple API for XML.
   class SAX
     include Chars
 
     def initialize(io : IO, @handlers : Handlers)
-      @chars = CharReader.new(io)
+      @reader = CharReader.new(io)
       @buffer = IO::Memory.new
       @name_buffer = IO::Memory.new
       @string_pool = StringPool.new
     end
 
     def parse : Nil
-      @chars.autodetect_encoding!
+      @reader.autodetect_encoding!
 
-      if @chars.consume?('<', '?', 'x', 'm', 'l')
+      if @reader.consume?('<', '?', 'x', 'm', 'l')
         expect_whitespace
         parse_xml_decl
       end
 
-      while @chars.current?
+      while @reader.current?
         skip_whitespace
 
-        if @chars.consume?('<', '?')
+        if @reader.consume?('<', '?')
           parse_processing_instruction
-        elsif @chars.consume?('<', '!', 'D', 'O', 'C', 'T', 'Y', 'P', 'E')
+        elsif @reader.consume?('<', '!', 'D', 'O', 'C', 'T', 'Y', 'P', 'E')
           parse_doctype_decl
-        elsif @chars.consume?('<', '!', '-', '-')
+        elsif @reader.consume?('<', '!', '-', '-')
           parse_comment
         else
           break
@@ -152,8 +50,8 @@ module XML
       version, encoding, standalone = "1.0", "", true
 
       loop do
-        if @chars.current? == '?'
-          @chars.consume
+        if @reader.current? == '?'
+          @reader.consume
           expect '>'
           break
         end
@@ -179,8 +77,8 @@ module XML
         skip_whitespace
       end
 
-      @chars.set_encoding(encoding) unless encoding.blank?
-      @chars.normalize_eol = :always if version == "1.1"
+      @reader.set_encoding(encoding) unless encoding.blank?
+      @reader.normalize_eol = :always if version == "1.1"
 
       @handlers.xml_decl(version, encoding, standalone)
     end
@@ -191,13 +89,13 @@ module XML
       expect_whitespace
       name = parse_name
 
-      # expect_whitespace unless @chars.current? == '>'
+      # expect_whitespace unless @reader.current? == '>'
       skip_whitespace
       public_id, system_id = parse_external_id
       skip_whitespace
 
-      if @chars.current? == '['
-        @chars.consume
+      if @reader.current? == '['
+        @reader.consume
         intsubset = true
       end
 
@@ -212,20 +110,20 @@ module XML
     end
 
     def parse_external_id(loose_system_id = false) : {String?, String?}
-      if @chars.consume?('P', 'U', 'B', 'L', 'I', 'C')
+      if @reader.consume?('P', 'U', 'B', 'L', 'I', 'C')
         expect_whitespace
         public_id = parse_pubid_literal
 
         if loose_system_id
           skip_whitespace
-          if @chars.current? == '"' || @chars.current? == '\''
+          if @reader.current? == '"' || @reader.current? == '\''
             system_id = parse_system_literal
           end
         else
           expect_whitespace
           system_id = parse_system_literal
         end
-      elsif @chars.consume?('S', 'Y', 'S', 'T', 'E', 'M')
+      elsif @reader.consume?('S', 'Y', 'S', 'T', 'E', 'M')
         expect_whitespace
         system_id = parse_system_literal
       end
@@ -253,28 +151,28 @@ module XML
       loop do
         skip_whitespace
 
-        case char = @chars.current?
+        case char = @reader.current?
         when '<'
-          if @chars.consume?('<', '!', 'A', 'T', 'T', 'L', 'I', 'S', 'T')
+          if @reader.consume?('<', '!', 'A', 'T', 'T', 'L', 'I', 'S', 'T')
             parse_attlist_decl
-          elsif @chars.consume?('<', '!', 'E', 'L', 'E', 'M', 'E', 'N', 'T')
+          elsif @reader.consume?('<', '!', 'E', 'L', 'E', 'M', 'E', 'N', 'T')
             parse_element_decl
-          elsif @chars.consume?('<', '!', 'E', 'N', 'T', 'I', 'T', 'Y')
+          elsif @reader.consume?('<', '!', 'E', 'N', 'T', 'I', 'T', 'Y')
             parse_entity_decl
-          elsif @chars.consume?('<', '!', 'N', 'O', 'T', 'A', 'T', 'I', 'O', 'N')
+          elsif @reader.consume?('<', '!', 'N', 'O', 'T', 'A', 'T', 'I', 'O', 'N')
             parse_notation_decl
-          elsif @chars.consume?('<', '?')
+          elsif @reader.consume?('<', '?')
             parse_processing_instruction
-          elsif @chars.consume?('<', '!', '-', '-')
+          elsif @reader.consume?('<', '!', '-', '-')
             parse_comment
           end
         when '%'
-          @chars.consume
+          @reader.consume
           name = parse_name
           expect ';'
           # @handlers.entity_ref(name, parameter: true)
         when ']'
-          @chars.consume
+          @reader.consume
           break
         end
       end
@@ -285,7 +183,7 @@ module XML
       element_name = parse_name
       skip_whitespace
 
-      until @chars.current? == '>'
+      until @reader.current? == '>'
         name = parse_name
         expect_whitespace
         type = parse_att_type
@@ -298,23 +196,23 @@ module XML
     end
 
     def parse_att_type : Symbol | {Symbol, Array(String)}
-      if @chars.consume?('C', 'D', 'A', 'T', 'A')
+      if @reader.consume?('C', 'D', 'A', 'T', 'A')
         :CDATA
-      elsif @chars.consume?('I', 'D', 'R', 'E', 'F', 'S')
+      elsif @reader.consume?('I', 'D', 'R', 'E', 'F', 'S')
         :IDREF
-      elsif @chars.consume?('I', 'D', 'R', 'E', 'F')
+      elsif @reader.consume?('I', 'D', 'R', 'E', 'F')
         :IDREF
-      elsif @chars.consume?('I', 'D')
+      elsif @reader.consume?('I', 'D')
         :ID
-      elsif @chars.consume?('E', 'N', 'T', 'I', 'T', 'I', 'E', 'S')
+      elsif @reader.consume?('E', 'N', 'T', 'I', 'T', 'I', 'E', 'S')
         :ENTITIES
-      elsif @chars.consume?('E', 'N', 'T', 'I', 'T', 'Y')
+      elsif @reader.consume?('E', 'N', 'T', 'I', 'T', 'Y')
         :ENTITY
-      elsif @chars.consume?('N', 'M', 'T', 'O', 'K', 'E', 'N', 'S')
+      elsif @reader.consume?('N', 'M', 'T', 'O', 'K', 'E', 'N', 'S')
         :NMTOKENS
-      elsif @chars.consume?('N', 'M', 'T', 'O', 'K', 'E', 'N')
+      elsif @reader.consume?('N', 'M', 'T', 'O', 'K', 'E', 'N')
         :NMTOKEN
-      elsif @chars.consume?('N', 'O', 'T', 'A', 'T', 'I', 'O', 'N')
+      elsif @reader.consume?('N', 'O', 'T', 'A', 'T', 'I', 'O', 'N')
         expect_whitespace
         names = parse_list { parse_name }
         {:NOTATION, names}
@@ -339,15 +237,15 @@ module XML
     end
 
     def parse_default_decl : Symbol | String
-      if @chars.consume?('#', 'R', 'E', 'Q', 'U', 'I', 'R', 'E', 'D')
+      if @reader.consume?('#', 'R', 'E', 'Q', 'U', 'I', 'R', 'E', 'D')
         return :REQUIRED
       end
 
-      if @chars.consume?('#', 'I', 'M', 'P', 'L', 'I', 'E', 'D')
+      if @reader.consume?('#', 'I', 'M', 'P', 'L', 'I', 'E', 'D')
         return :IMPLIED
       end
 
-      if @chars.consume?('#', 'F', 'I', 'X', 'E', 'D')
+      if @reader.consume?('#', 'F', 'I', 'X', 'E', 'D')
         expect_whitespace
       end
       parse_attr_value
@@ -364,18 +262,18 @@ module XML
     end
 
     def parse_content_spec
-      if @chars.consume?('E', 'M', 'P', 'T', 'Y')
+      if @reader.consume?('E', 'M', 'P', 'T', 'Y')
         return ElementDecl::Empty.new
       end
 
-      if @chars.consume?('A', 'N', 'Y')
+      if @reader.consume?('A', 'N', 'Y')
         return ElementDecl::Any.new
       end
 
       expect '('
       skip_whitespace
 
-      if @chars.consume?('#', 'P', 'C', 'D', 'A', 'T', 'A')
+      if @reader.consume?('#', 'P', 'C', 'D', 'A', 'T', 'A')
         names = [] of String
         loop do
           skip_whitespace
@@ -383,7 +281,7 @@ module XML
           skip_whitespace
           names << parse_name
         end
-        @chars.consume if @chars.current? == '*'
+        @reader.consume if @reader.current? == '*'
         ElementDecl::Mixed.new(names)
       else
         parse_children
@@ -395,9 +293,9 @@ module XML
       children = [] of ElementDecl::Children
 
       loop do
-        case @chars.current?
+        case @reader.current?
         when '('
-          @chars.consume
+          @reader.consume
           skip_whitespace
           child = parse_children
           child.quantifier = parse_quantifier
@@ -410,16 +308,16 @@ module XML
           skip_whitespace
         end
 
-        case @chars.current?
+        case @reader.current?
         when ')'
-          @chars.consume
+          @reader.consume
           break
         when '|'
           fatal_error("Expected ',' but got '|'") if klass == ElementDecl::Seq
-          @chars.consume
+          @reader.consume
           klass = ElementDecl::Choice
         when ','
-          @chars.consume
+          @reader.consume
           fatal_error("Expected '|' but got ','") if klass == ElementDecl::Choice
           klass = ElementDecl::Seq
         end
@@ -437,15 +335,15 @@ module XML
     end
 
     private def parse_quantifier
-      case @chars.current?
+      case @reader.current?
       when '?'
-        @chars.consume
+        @reader.consume
         ElementDecl::Quantifier::OPTIONAL
       when '*'
-        @chars.consume
+        @reader.consume
         ElementDecl::Quantifier::REPEATED
       when '+'
-        @chars.consume
+        @reader.consume
         ElementDecl::Quantifier::PLUS
       else
         ElementDecl::Quantifier::NONE
@@ -455,8 +353,8 @@ module XML
     def parse_entity_decl
       expect_whitespace
 
-      if @chars.current? == '%'
-        @chars.consume
+      if @reader.current? == '%'
+        @reader.consume
         expect_whitespace
         parameter = true
       else
@@ -465,30 +363,33 @@ module XML
       name = parse_name
       expect_whitespace
 
-      case @chars.current?
+      case @reader.current?
       when '"', '\''
-        quote = @chars.consume
+        quote = @reader.consume
         value = consume_until { |char| char == quote }
         expect quote
       when 'P', 'S'
         public_id, system_id = parse_external_id
         skip_whitespace
-        if @chars.consume?('N', 'D', 'A', 'T', 'A')
+        if @reader.consume?('N', 'D', 'A', 'T', 'A')
           expect_whitespace
-          ndata = parse_name
+          notation_id = parse_name
         end
       end
 
       skip_whitespace
       expect '>'
 
-      if value
-        @handlers.entity_decl(name, value, parameter)
-      elsif ndata
-        @handlers.unparsed_entity_decl(name, public_id, system_id, ndata)
-      else
-        @handlers.external_entity_decl(name, public_id, system_id, parameter)
-      end
+      entity =
+        if value
+          EntityDecl::Internal.new(name, parameter, value)
+        elsif notation_id
+          EntityDecl::Unparsed.new(name, public_id, system_id, notation_id)
+        else
+          EntityDecl::External.new(name, parameter, public_id, system_id)
+        end
+
+      @handlers.entity_decl(entity)
     end
 
     def parse_notation_decl
@@ -507,14 +408,14 @@ module XML
         recoverable_error "PI: reserved prefix #{target.inspect}"
       end
 
-      # expect_whitespace unless @chars.current == '?'
+      # expect_whitespace unless @reader.current == '?'
       skip_whitespace
 
       data = consume_until do |char|
-        char == '?' && @chars.peek == '>'
+        char == '?' && @reader.peek == '>'
       end
-      @chars.consume # ?
-      @chars.consume # >
+      @reader.consume # ?
+      @reader.consume # >
 
       @handlers.processing_instruction(target, data)
     end
@@ -523,31 +424,31 @@ module XML
       # WF: double hyphens (--) isn't allowed within comments
       # WF: grammar doesn't allow ---> to end comment
       data = consume_until do |char|
-        @chars.consume?('-', '-', '>')
+        @reader.consume?('-', '-', '>')
       end
       @handlers.comment(data)
     end
 
     # TODO: CDATASection
     def parse_content : Nil
-      while char = @chars.current?
+      while char = @reader.current?
         if char == '<'
-          if @chars.consume?('<', '!', '-', '-')
+          if @reader.consume?('<', '!', '-', '-')
             parse_comment
-          elsif @chars.consume?('<', '!', '[', 'C', 'D', 'A', 'T', 'A', '[')
+          elsif @reader.consume?('<', '!', '[', 'C', 'D', 'A', 'T', 'A', '[')
             parse_cdata
-          elsif @chars.consume?('<', '?')
+          elsif @reader.consume?('<', '?')
             parse_processing_instruction
-          elsif @chars.consume?('<', '/')
+          elsif @reader.consume?('<', '/')
             name = parse_name
             skip_whitespace
             expect '>'
             @handlers.end_element(name)
           else
-            @chars.consume # '<'
+            @reader.consume # '<'
             name = parse_name
             attributes = parse_attributes
-            if @chars.consume?('/', '>')
+            if @reader.consume?('/', '>')
               @handlers.empty_element(name, attributes)
             else
               expect '>'
@@ -561,12 +462,12 @@ module XML
     end
 
     def parse_character_data : Nil
-      while char = @chars.current?
+      while char = @reader.current?
         case char
         when '<'
           break
         when '&'
-          if @chars.peek == '#'
+          if @reader.peek == '#'
             parse_character_reference
           else
             parse_entity_reference do |name|
@@ -578,7 +479,7 @@ module XML
           end
         else
           @buffer << char
-          @chars.consume
+          @reader.consume
         end
       end
 
@@ -594,13 +495,13 @@ module XML
       bytesize = @buffer.bytesize
       value = 0
 
-      @buffer << @chars.consume # '&'
-      @buffer << @chars.consume # '#'
+      @buffer << @reader.consume # '&'
+      @buffer << @reader.consume # '#'
 
-      if @chars.current? == 'x'
-        @buffer << @chars.consume
+      if @reader.current? == 'x'
+        @buffer << @reader.consume
 
-        while char = @chars.consume
+        while char = @reader.consume
           @buffer << char
 
           case char
@@ -620,7 +521,7 @@ module XML
           end
         end
       else
-        while char = @chars.consume
+        while char = @reader.consume
           @buffer << char
 
           case char
@@ -641,12 +542,12 @@ module XML
     end
 
     def parse_entity_reference(&) : Nil
-      @chars.consume # '&'
+      @reader.consume # '&'
 
       name = parse_name
 
-      if @chars.current? == ';'
-        @chars.consume
+      if @reader.current? == ';'
+        @reader.consume
 
         case name
         when "lt" then @buffer << '<'
@@ -666,20 +567,20 @@ module XML
     end
 
     def parse_cdata : Nil
-      data = consume_until { @chars.consume?(']', ']', '>') }
+      data = consume_until { @reader.consume?(']', ']', '>') }
       @handlers.cdata_section(data)
     end
 
     def parse_name : String
-      char = @chars.current
+      char = @reader.current
       fatal_error("Invalid name start char #{char.inspect}") unless name_start?(char)
 
       @name_buffer << char
-      @chars.consume
+      @reader.consume
 
-      while (char = @chars.current?) && name?(char)
+      while (char = @reader.current?) && name?(char)
         @name_buffer << char
-        @chars.consume
+        @reader.consume
       end
 
       @string_pool.get(@name_buffer.to_slice)
@@ -688,9 +589,9 @@ module XML
     end
 
     def parse_nmtoken : String
-      while (char = @chars.current?) && name?(char)
+      while (char = @reader.current?) && name?(char)
         @name_buffer << char
-        @chars.consume
+        @reader.consume
       end
       @string_pool.get(@name_buffer.to_slice)
     ensure
@@ -703,11 +604,11 @@ module XML
       loop do
         skip_whitespace
 
-        case @chars.current?
+        case @reader.current?
         when '>'
           break
         when '/'
-          break if @chars.peek == '>'
+          break if @reader.peek == '>'
         end
 
         name = parse_name
@@ -724,12 +625,12 @@ module XML
     def parse_attr_value : String
       quote = expect '"', '\''
 
-      while char = @chars.current?
+      while char = @reader.current?
         case char
         when quote
           break
         when '&'
-          if @chars.peek == '#'
+          if @reader.peek == '#'
             parse_character_reference
           else
             parse_entity_reference do |name|
@@ -740,12 +641,12 @@ module XML
           end
         else
           @buffer << char
-          @chars.consume
+          @reader.consume
         end
       end
 
       value = consume_until { |char| char == quote }
-      @chars.consume # quote
+      @reader.consume # quote
       value
     ensure
       @buffer.clear
@@ -755,38 +656,38 @@ module XML
       quote = expect '"', '\''
       # WF: must start with `encname_start?` and continue with `encname?`
       value = consume_until { |char| char == quote }
-      @chars.consume # quote
+      @reader.consume # quote
       value
     end
 
     def skip_whitespace : Nil
-      while (char = @chars.current?) && s?(char)
-        @chars.consume
+      while (char = @reader.current?) && s?(char)
+        @reader.consume
       end
     end
 
     def expect_whitespace : Nil
-      if s?(@chars.current)
-        while (char = @chars.current?) && s?(char)
-          @chars.consume
+      if s?(@reader.current)
+        while (char = @reader.current?) && s?(char)
+          @reader.consume
         end
       else
-        fatal_error("Expected whitespace but got #{@chars.current.inspect}")
+        fatal_error("Expected whitespace but got #{@reader.current.inspect}")
       end
     end
 
     private def expect(*chars : Char) : Char
-      if chars.includes?(@chars.current)
-        @chars.consume
+      if chars.includes?(@reader.current)
+        @reader.consume
       else
-        fatal_error("Expected any of #{chars.inspect} but got #{@chars.current.inspect}")
+        fatal_error("Expected any of #{chars.inspect} but got #{@reader.current.inspect}")
       end
     end
 
     private def consume_until(& : Char -> Bool) : String
-      until yield(char = @chars.current)
+      until yield(char = @reader.current)
         @buffer << char
-        @chars.consume
+        @reader.consume
       end
       @buffer.to_s
     ensure
@@ -794,11 +695,15 @@ module XML
     end
 
     private def recoverable_error(message : String)
-      @handlers.error(message, @chars.location)
+      @handlers.error(message, @reader.location)
     end
 
     private def fatal_error(message : String)
-      raise Error.new(message, @chars.location)
+      raise Error.new(message, @reader.location)
+    end
+
+    def location : Location
+      @reader.location
     end
 
     class Handlers
@@ -817,13 +722,7 @@ module XML
       def element_decl(name : String, content : ElementDecl) : Nil
       end
 
-      def entity_decl(name : String, value : String, parameter : Bool) : Nil
-      end
-
-      def external_entity_decl(name : String, public_id : String?, system_id : String?, parameter : Bool) : Nil
-      end
-
-      def unparsed_entity_decl(name : String, public_id : String?, system_id : String?, ndata : String?) : Nil
+      def entity_decl(entity : EntityDecl) : Nil
       end
 
       def notation_decl(name : String, public_id : String?, system_id : String?) : Nil

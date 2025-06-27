@@ -17,16 +17,8 @@ class DebugHandlers < XML::SAX::Handlers
     p [:element_decl, name, content]
   end
 
-  def entity_decl(name : String, value : String, parameter : Bool) : Nil
-    p [:entity_decl, name, value, parameter]
-  end
-
-  def external_entity_decl(name : String, public_id : String?, system_id : String?, parameter : Bool) : Nil
-    p [:external_entity_decl, name, public_id, system_id, parameter]
-  end
-
-  def unparsed_entity_decl(name : String, public_id : String?, system_id : String?, ndata : String?) : Nil
-    p [:unparsed_entity_decl, name, public_id, system_id, ndata]
+  def entity_decl(entity : XML::EntityDecl) : Nil
+    p [:entity_decl, entity]
   end
 
   def notation_decl(name : String, public_id : String?, system_id : String?) : Nil
