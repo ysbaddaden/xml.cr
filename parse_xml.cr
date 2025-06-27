@@ -13,8 +13,8 @@ class DebugHandlers < XML::SAX::Handlers
     p [:raw_attlist_decl, element_name, attribute_name, type, default]
   end
 
-  def raw_element_decl(name : String, raw_data : String) : Nil
-    p [:raw_element_decl, name, raw_data]
+  def element_decl(name : String, content : XML::ElementDecl) : Nil
+    p [:element_decl, name, content]
   end
 
   def entity_decl(name : String, value : String, parameter : Bool) : Nil

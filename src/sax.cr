@@ -8,6 +8,110 @@ class IO::Memory
 end
 
 module XML
+  abstract class ElementDecl
+    enum Quantifier
+      NONE = 0
+      OPTIONAL
+      REPEATED
+      PLUS
+
+      protected def to_char? : Char?
+        case self
+        when OPTIONAL then '?'
+        when REPEATED then '*'
+        when PLUS then '+'
+        end
+      end
+    end
+
+    class Empty < ElementDecl
+      # :nodoc:
+      def inspect(io : IO) : Nil
+        io << "EMPTY"
+      end
+    end
+
+    class Any < ElementDecl
+      # :nodoc:
+      def inspect(io : IO) : Nil
+        io << "ANY"
+      end
+    end
+
+    class Mixed < ElementDecl
+      getter names : Array(String)
+
+      def initialize(@names)
+      end
+
+      # :nodoc:
+      def inspect(io : IO) : Nil
+        io << "MIXED"
+        return if @names.empty?
+
+        io << '('
+        @names.join(io, '|')
+        io << ')'
+      end
+    end
+
+    abstract class Children < ElementDecl
+      property quantifier : Quantifier
+
+      private def initialize(@quantifier)
+      end
+    end
+
+    class Name < Children
+      property name : String
+
+      def initialize(@quantifier, @name)
+      end
+
+      # :nodoc:
+      def inspect(io : IO) : Nil
+        io << @name
+        io << @quantifier.to_char?
+      end
+    end
+
+    class Choice < Children
+      getter children : Array(Name | Choice | Seq)
+
+      def initialize(@quantifier, @children)
+      end
+
+      # :nodoc:
+      def inspect(io : IO) : Nil
+        io << "CHOICE("
+        @children.each_with_index do |child, index|
+          io << ", " unless index == 0
+          child.inspect(io)
+        end
+        io << ')'
+        io << @quantifier.to_char?
+      end
+    end
+
+    class Seq < Children
+      getter children : Array(Name | Choice | Seq)
+
+      def initialize(@quantifier, @children)
+      end
+
+      # :nodoc:
+      def inspect(io : IO) : Nil
+        io << "SEQ("
+        @children.each_with_index do |child, index|
+          io << ", " unless index == 0
+          child.inspect(io)
+        end
+        io << ')'
+        io << @quantifier.to_char?
+      end
+    end
+  end
+
   # Simple API for XML.
   class SAX
     include Chars
@@ -249,14 +353,103 @@ module XML
       parse_attr_value
     end
 
-    # todo: parse ElementDecl
     def parse_element_decl : Nil
       expect_whitespace
       name = parse_name
       expect_whitespace
-      raw_data = consume_until { |char| char == '>' }
+      model = parse_content_spec
+      skip_whitespace
       expect '>'
-      @handlers.raw_element_decl(name, raw_data)
+      @handlers.element_decl(name, model)
+    end
+
+    def parse_content_spec
+      if @chars.consume?('E', 'M', 'P', 'T', 'Y')
+        return ElementDecl::Empty.new
+      end
+
+      if @chars.consume?('A', 'N', 'Y')
+        return ElementDecl::Any.new
+      end
+
+      expect '('
+      skip_whitespace
+
+      if @chars.consume?('#', 'P', 'C', 'D', 'A', 'T', 'A')
+        names = [] of String
+        loop do
+          skip_whitespace
+          break if expect(')', '|') == ')'
+          skip_whitespace
+          names << parse_name
+        end
+        @chars.consume if @chars.current? == '*'
+        ElementDecl::Mixed.new(names)
+      else
+        parse_children
+      end
+    end
+
+    private def parse_children : ElementDecl::Children
+      klass = nil
+      children = [] of ElementDecl::Children
+
+      loop do
+        case @chars.current?
+        when '('
+          @chars.consume
+          skip_whitespace
+          child = parse_children
+          child.quantifier = parse_quantifier
+          children << child
+          skip_whitespace
+        else
+          name = parse_name
+          quantifier = parse_quantifier
+          children << ElementDecl::Name.new(quantifier, name)
+          skip_whitespace
+        end
+
+        case @chars.current?
+        when ')'
+          @chars.consume
+          break
+        when '|'
+          fatal_error("Expected ',' but got '|'") if klass == ElementDecl::Seq
+          @chars.consume
+          klass = ElementDecl::Choice
+        when ','
+          @chars.consume
+          fatal_error("Expected '|' but got ','") if klass == ElementDecl::Choice
+          klass = ElementDecl::Seq
+        end
+
+        skip_whitespace
+      end
+
+      quantifier = parse_quantifier
+
+      if klass == ElementDecl::Choice
+        ElementDecl::Choice.new(quantifier, children)
+      else
+        ElementDecl::Seq.new(quantifier, children)
+      end
+    end
+
+    private def parse_quantifier
+      case @chars.current?
+      when '?'
+        @chars.consume
+        ElementDecl::Quantifier::OPTIONAL
+      when '*'
+        @chars.consume
+        ElementDecl::Quantifier::REPEATED
+      when '+'
+        @chars.consume
+        ElementDecl::Quantifier::PLUS
+      else
+        ElementDecl::Quantifier::NONE
+      end
     end
 
     def parse_entity_decl
@@ -618,17 +811,10 @@ module XML
       def end_doctype_decl : Nil
       end
 
-      # Called for every attribute declaration. If a single attlistdecl declares
-      # multiple attributes, it will be called once per attribute.
-      #
-      # - *type* can be the string or tokenized type (e.g. `:CDATA`, `NMTOKENS`,
-      # ...) or `{:NOTATION, names}` or `{:ENUMERATION, nmtokens}`.
-      # - *default* is either `:REQUIRED`, `:IMPLIED` or the default value.
       def attlist_decl(element_name : String, attribute_name : String, type : Symbol | {Symbol, Array(String)}, default : Symbol | String) : Nil
       end
 
-      @[Experimental]
-      def raw_element_decl(name : String, raw_data : String) : Nil
+      def element_decl(name : String, content : ElementDecl) : Nil
       end
 
       def entity_decl(name : String, value : String, parameter : Bool) : Nil
