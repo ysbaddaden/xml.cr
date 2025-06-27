@@ -176,18 +176,81 @@ module XML
       end
     end
 
-    # todo: parse AttlistDecl
-    def parse_attlist_decl
+    def parse_attlist_decl : Nil
       expect_whitespace
-      name = parse_name
+      element_name = parse_name
       skip_whitespace
-      raw_data = consume_until { |char| char == '>' }
+
+      until @chars.current? == '>'
+        name = parse_name
+        expect_whitespace
+        type = parse_att_type
+        expect_whitespace
+        default = parse_default_decl
+        @handlers.attlist_decl(element_name, name, type, default)
+        skip_whitespace
+      end
       expect '>'
-      @handlers.raw_attlist_decl(name, raw_data)
+    end
+
+    def parse_att_type : Symbol | {Symbol, Array(String)}
+      if @chars.consume?('C', 'D', 'A', 'T', 'A')
+        :CDATA
+      elsif @chars.consume?('I', 'D', 'R', 'E', 'F', 'S')
+        :IDREF
+      elsif @chars.consume?('I', 'D', 'R', 'E', 'F')
+        :IDREF
+      elsif @chars.consume?('I', 'D')
+        :ID
+      elsif @chars.consume?('E', 'N', 'T', 'I', 'T', 'I', 'E', 'S')
+        :ENTITIES
+      elsif @chars.consume?('E', 'N', 'T', 'I', 'T', 'Y')
+        :ENTITY
+      elsif @chars.consume?('N', 'M', 'T', 'O', 'K', 'E', 'N', 'S')
+        :NMTOKENS
+      elsif @chars.consume?('N', 'M', 'T', 'O', 'K', 'E', 'N')
+        :NMTOKEN
+      elsif @chars.consume?('N', 'O', 'T', 'A', 'T', 'I', 'O', 'N')
+        expect_whitespace
+        names = parse_list { parse_name }
+        {:NOTATION, names}
+      else
+        nmtokens = parse_list { parse_nmtoken }
+        {:ENUMERATION, nmtokens}
+      end
+    end
+
+    private def parse_list(&) : Array(String)
+      list = [] of String
+
+      expect '('
+      loop do
+        skip_whitespace
+        list << yield
+        skip_whitespace
+        break if expect(')', '|') == ')'
+      end
+
+      list
+    end
+
+    def parse_default_decl : Symbol | String
+      if @chars.consume?('#', 'R', 'E', 'Q', 'U', 'I', 'R', 'E', 'D')
+        return :REQUIRED
+      end
+
+      if @chars.consume?('#', 'I', 'M', 'P', 'L', 'I', 'E', 'D')
+        return :IMPLIED
+      end
+
+      if @chars.consume?('#', 'F', 'I', 'X', 'E', 'D')
+        expect_whitespace
+      end
+      parse_attr_value
     end
 
     # todo: parse ElementDecl
-    def parse_element_decl
+    def parse_element_decl : Nil
       expect_whitespace
       name = parse_name
       expect_whitespace
@@ -431,6 +494,16 @@ module XML
       @name_buffer.clear
     end
 
+    def parse_nmtoken : String
+      while (char = @chars.current?) && name?(char)
+        @name_buffer << char
+        @chars.consume
+      end
+      @string_pool.get(@name_buffer.to_slice)
+    ensure
+      @name_buffer.clear
+    end
+
     def parse_attributes : Array({String, String})
       attributes = [] of {String, String}
 
@@ -545,8 +618,13 @@ module XML
       def end_doctype_decl : Nil
       end
 
-      @[Experimental]
-      def raw_attlist_decl(name : String, raw_data : String) : Nil
+      # Called for every attribute declaration. If a single attlistdecl declares
+      # multiple attributes, it will be called once per attribute.
+      #
+      # - *type* can be the string or tokenized type (e.g. `:CDATA`, `NMTOKENS`,
+      # ...) or `{:NOTATION, names}` or `{:ENUMERATION, nmtokens}`.
+      # - *default* is either `:REQUIRED`, `:IMPLIED` or the default value.
+      def attlist_decl(element_name : String, attribute_name : String, type : Symbol | {Symbol, Array(String)}, default : Symbol | String) : Nil
       end
 
       @[Experimental]
