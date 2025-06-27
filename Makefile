@@ -2,17 +2,24 @@
 .PHONY:
 
 CRYSTAL = crystal
+CRFLAGS =
 
 all: bin/parse_xml
 
 bin/parse_xml: parse_xml.cr src/*.cr src/**.cr
 	@mkdir -p bin
-	$(CRYSTAL) build $< -o $@
+	$(CRYSTAL) build $(CRFLAGS) $< -o $@
 
-test: bin/parse_xml xmlconf/xmltest/valid/sa/*.xml
+test: ibm oasis xmltest
 
-xmlconf/xmltest/valid/sa/%.xml: .PHONY
+ibm: xmlconf/ibm/valid/*/*.xml
+oasis: xmlconf/oasis/*pass*.xml
+xmltest: xmlconf/xmltest/valid/*/*.xml
+japanese: xmlconf/japanese/*.xml
+
+xmlconf/%.xml: .PHONY
 	./bin/parse_xml $@
+	@echo
 
 clean: .PHONY
 	rm -f bin/parse_xml
