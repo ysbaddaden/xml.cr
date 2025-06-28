@@ -4,8 +4,13 @@ module XML
       property? parameter : Bool
       property value : String
       property location : Location
+      getter? needs_processing : Bool
 
       def initialize(@name, @parameter, @value, @location)
+        @needs_processing =
+          @value.includes?('<') ||
+          @value.includes?('&') ||
+          (@parameter && @value.includes?('%'))
       end
     end
 

@@ -65,12 +65,12 @@ module XML
         case attr_name
         when "version"
           # WF: value can only b "1.0", '1.0', "1.1" or '1.1'
-          version = parse_attr_value
+          version = parse_att_value
         when "encoding"
           encoding = parse_encoding
         when "standalone"
           # WF: expect "yes", 'yes', "no" or 'no'
-          standalone = parse_attr_value.compare("yes", case_insensitive: true) == 0
+          standalone = parse_att_value.compare("yes", case_insensitive: true) == 0
         else
           recoverable_error("XMLDECL: unexpected attribute #{attr_name.inspect}")
         end
@@ -185,20 +185,73 @@ module XML
       end
     end
 
+    # Searches the parameter entity for *name* and processes its replacement
+    # text when found. Returns true if the entity's value has been processed,
+    # false otherwise.
+    #
+    # NOTE: The entity must be an internal entity. External entities can't be
+    # processed, (yet).
     def process_parameter_entity?(name : String) : Bool
       return false unless entity = @entities[name]?
-      return false unless entity.is_a?(EntityDecl::Internal)
       return false unless entity.parameter?
+      return false unless entity.is_a?(EntityDecl::Internal)
 
-      input = IO::Memory.new(entity.value)
-      reader, @reader = @reader, CharReader.new(input, @reader.normalize_eol, entity.location)
-      begin
+      process_parameter_entity(entity)
+      true
+    end
+
+    # Processes the internal *entity* as a parameter entity (DTD).
+    def process_parameter_entity(entity : EntityDecl::Internal) : Nil
+      unless entity.needs_processing?
+        @buffer << entity.value
+        return
+      end
+      with_replacement_text(entity.value, entity.location) do
         parse_intsubset
+      end
+    end
+
+    # Searches the general entity for *name* and processes its replacement text
+    # when found. Returns true if the entity's value has been processed, false
+    # otherwise.
+    #
+    # NOTE: The entity must be an internal entity. External entities can't be
+    # processed, (yet).
+    def process_general_entity?(name : String, context : Symbol) : Bool
+      return false unless entity = @entities[name]?
+      return false unless entity.is_a?(EntityDecl::Internal)
+      return false if entity.parameter?
+
+      process_general_entity(entity, context)
+      true
+    end
+
+    # Processes the internal *entity* as a general entity (content).
+    def process_general_entity(entity : EntityDecl::Internal, context : Symbol) : Nil
+      unless entity.needs_processing?
+        @buffer << entity.value
+        return
+      end
+      with_replacement_text(entity.value, entity.location) do
+        case context
+        when :att_value
+          parse_att_value_impl(quote: nil)
+        when :element
+          parse_content
+        else
+          raise "unreachable"
+        end
+      end
+    end
+
+    private def with_replacement_text(input : String, location : Location, &)
+      reader = @reader
+      @reader = CharReader.new(IO::Memory.new(input), @reader.normalize_eol, location)
+      begin
+        yield
       ensure
         @reader = reader
       end
-
-      true
     end
 
     def parse_attlist_decl : Nil
@@ -237,17 +290,16 @@ module XML
         :NMTOKEN
       elsif @reader.consume?('N', 'O', 'T', 'A', 'T', 'I', 'O', 'N')
         expect_whitespace
-        names = parse_list { parse_name }
+        names = parse_att_list { parse_name }
         {:NOTATION, names}
       else
-        nmtokens = parse_list { parse_nmtoken }
+        nmtokens = parse_att_list { parse_nmtoken }
         {:ENUMERATION, nmtokens}
       end
     end
 
-    private def parse_list(&) : Array(String)
+    private def parse_att_list(&) : Array(String)
       list = [] of String
-
       expect '('
       loop do
         skip_whitespace
@@ -255,7 +307,6 @@ module XML
         skip_whitespace
         break if expect(')', '|') == ')'
       end
-
       list
     end
 
@@ -271,7 +322,7 @@ module XML
       if @reader.consume?('#', 'F', 'I', 'X', 'E', 'D')
         expect_whitespace
       end
-      parse_attr_value
+      parse_att_value
     end
 
     def parse_element_decl : Nil
@@ -357,7 +408,7 @@ module XML
       end
     end
 
-    private def parse_quantifier
+    private def parse_quantifier : ElementDecl::Quantifier
       case @reader.current?
       when '?'
         @reader.consume
@@ -373,7 +424,7 @@ module XML
       end
     end
 
-    def parse_entity_decl
+    def parse_entity_decl : Nil
       expect_whitespace
 
       if @reader.current? == '%'
@@ -388,6 +439,8 @@ module XML
 
       case @reader.current?
       when '"', '\''
+        # OPTIMIZE: determine and remember if value (replacement text) is
+        # character data or more complex (it contains any of '&' or '%' or '<')
         quote = @reader.consume
         location = @reader.location
         value = parse_entity_value(quote)
@@ -447,7 +500,7 @@ module XML
       value
     end
 
-    def parse_notation_decl
+    def parse_notation_decl : Nil
       expect_whitespace
       name = parse_name
       expect_whitespace
@@ -524,10 +577,9 @@ module XML
           if @reader.peek == '#'
             parse_character_reference
           else
-            parse_entity_reference do |name|
-              data = @buffer.to_s
+            parse_entity_reference(:element) do |name|
+              @handlers.character_data(@buffer.to_s) if @buffer.size > 0
               @buffer.clear
-              @handlers.character_data(data)
               @handlers.entity_reference(name)
             end
           end
@@ -536,15 +588,13 @@ module XML
           @reader.consume
         end
       end
-
-      data = @buffer.to_s
+      @handlers.character_data(@buffer.to_s) if @buffer.size > 0
       @buffer.clear
-
-      @handlers.character_data(data)
     end
 
     def parse_character_reference : Nil
-      # keep current buffer pos so we can "rewind" on invalid syntax
+      # keep current buffer pos so we can "rewind" on valid syntax, and have
+      # nothing to do on invalid syntax (we pushed every char to the buffer)
       pos = @buffer.pos
       bytesize = @buffer.bytesize
       value = 0
@@ -595,7 +645,7 @@ module XML
       recoverable_error "Invalid character reference"
     end
 
-    def parse_entity_reference(&) : Nil
+    def parse_entity_reference(context : Symbol, &) : Nil
       @reader.consume # '&'
 
       name = parse_name
@@ -610,10 +660,7 @@ module XML
         when "apos" then @buffer << '\''
         when "quot" then @buffer << '"'
         else
-          if (entity = @entities[name]?) && entity.is_a?(EntityDecl::Internal)
-            # TODO: parse entity value as self contained XML
-            @buffer << entity.value
-          else
+          unless process_general_entity?(name, context)
             yield name
           end
         end
@@ -673,25 +720,30 @@ module XML
         skip_whitespace
         expect '='
         skip_whitespace
-        value = parse_attr_value
+        value = parse_att_value
         attributes << {name, value}
       end
 
       attributes
     end
 
-    def parse_attr_value : String
+    def parse_att_value : String
       quote = expect '"', '\''
+      parse_att_value_impl(quote)
+    end
 
+    private def parse_att_value_impl(quote : Char?) : String
       while char = @reader.current?
-        case char
-        when quote
+        if quote && char == quote
+          @reader.consume
           break
+        end
+        case char
         when '&'
           if @reader.peek == '#'
             parse_character_reference
           else
-            parse_entity_reference do |name|
+            parse_entity_reference(:att_value) do |name|
               @buffer << '&'
               @buffer << name
               @buffer << ';'
@@ -702,10 +754,7 @@ module XML
           @reader.consume
         end
       end
-
-      value = consume_until { |char| char == quote }
-      @reader.consume # quote
-      value
+      @buffer.to_s
     ensure
       @buffer.clear
     end
