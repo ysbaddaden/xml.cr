@@ -1,3 +1,6 @@
+# Copyright 2025 Julien PORTALIER
+# Distributed under the Apache-2.0 LICENSE
+
 module XML
   struct Location
     property line : Int32
@@ -15,10 +18,7 @@ module XML
       end
     end
 
-    def adjust(line = 0, column = 0) : self
-      self.class.new(@line + line, @column + column)
-    end
-
+    # :nodoc:
     def inspect(io : IO)
       io << "line #{line} column #{column}"
     end

@@ -1,8 +1,12 @@
+# Copyright 2025 Julien PORTALIER
+# Distributed under the Apache-2.0 LICENSE
+
 require "string_pool"
-require "./char_reader"
 require "./chars"
-require "./element_decl"
-require "./entity_decl"
+require "./sax/element_decl"
+require "./sax/entity_decl"
+require "./sax/handlers"
+require "./sax/reader"
 
 class IO::Memory
   def bytesize=(@bytesize)
@@ -11,17 +15,34 @@ end
 
 module XML
   # Simple API for XML.
+  #
+  # Parses XML documents using a push-parser; whenever something is reached, for
+  # example an element starts, or a comment is reached, a callback is called
+  # with details about the event. Custom handlers can then do anything they want
+  # using these informations: stream the document while reacting to certain
+  # elements and skipping the rest, or build a complete DOM tree, or a partial
+  # tree without declarations, comments or processing instructions.
+  #
+  # See `Handlers` for the list of methods that will be called during parsing.
   class SAX
     include Chars
 
     def initialize(io : IO, @handlers : Handlers)
-      @reader = CharReader.new(io)
+      @reader = Reader.new(io)
       @buffer = IO::Memory.new
       @name_buffer = IO::Memory.new
       @string_pool = StringPool.new
       @entities = {} of String => EntityDecl
     end
 
+    # Returns the current location.
+    def location : Location
+      @reader.location
+    end
+
+    # Parses the whole XML document.
+    #
+    # Raises `Error` on fatal errors.
     def parse : Nil
       @reader.autodetect_encoding!
 
@@ -47,8 +68,8 @@ module XML
       parse_content
     end
 
-    def parse_xml_decl : Nil
-      version, encoding, standalone = "1.0", "", true
+    protected def parse_xml_decl : Nil
+      version, encoding, standalone = "1.0", nil, nil
 
       loop do
         if @reader.current? == '?'
@@ -78,13 +99,13 @@ module XML
         skip_whitespace
       end
 
-      @reader.set_encoding(encoding) unless encoding.blank?
+      @reader.set_encoding(encoding) unless encoding.nil? || encoding.blank?
       @reader.normalize_eol = :always if version == "1.1"
 
       @handlers.xml_decl(version, encoding, standalone)
     end
 
-    def parse_doctype_decl : Nil
+    protected def parse_doctype_decl : Nil
       intsubset = false
 
       expect_whitespace
@@ -110,7 +131,7 @@ module XML
       @handlers.end_doctype_decl
     end
 
-    def parse_external_id(loose_system_id = false) : {String?, String?}
+    protected def parse_external_id(loose_system_id = false) : {String?, String?}
       if @reader.consume?('P', 'U', 'B', 'L', 'I', 'C')
         expect_whitespace
         public_id = parse_pubid_literal
@@ -131,14 +152,14 @@ module XML
       {public_id, system_id}
     end
 
-    def parse_system_literal : String
+    protected def parse_system_literal : String
       quote = expect '"', '\''
       value = consume_until { |char| char == quote }
       expect quote
       value
     end
 
-    def parse_pubid_literal : String
+    protected def parse_pubid_literal : String
       quote = expect '"', '\''
       value = consume_until do |char|
         # WF: error unless pubid?(char)
@@ -148,7 +169,7 @@ module XML
       value
     end
 
-    def parse_intsubset : Nil
+    protected def parse_intsubset : Nil
       loop do
         skip_whitespace
 
@@ -191,7 +212,7 @@ module XML
     #
     # NOTE: The entity must be an internal entity. External entities can't be
     # processed, (yet).
-    def process_parameter_entity?(name : String) : Bool
+    protected def process_parameter_entity?(name : String) : Bool
       return false unless entity = @entities[name]?
       return false unless entity.parameter?
       return false unless entity.is_a?(EntityDecl::Internal)
@@ -201,7 +222,7 @@ module XML
     end
 
     # Processes the internal *entity* as a parameter entity (DTD).
-    def process_parameter_entity(entity : EntityDecl::Internal) : Nil
+    protected def process_parameter_entity(entity : EntityDecl::Internal) : Nil
       unless entity.needs_processing?
         @buffer << entity.value
         return
@@ -217,7 +238,7 @@ module XML
     #
     # NOTE: The entity must be an internal entity. External entities can't be
     # processed, (yet).
-    def process_general_entity?(name : String, context : Symbol) : Bool
+    protected def process_general_entity?(name : String, context : Symbol) : Bool
       return false unless entity = @entities[name]?
       return false unless entity.is_a?(EntityDecl::Internal)
       return false if entity.parameter?
@@ -227,12 +248,12 @@ module XML
     end
 
     # Processes the internal *entity* as a general entity (content).
-    def process_general_entity(entity : EntityDecl::Internal, context : Symbol) : Nil
+    protected def process_general_entity(entity : EntityDecl::Internal, context : Symbol) : Nil
       unless entity.needs_processing?
         @buffer << entity.value
         return
       end
-      with_replacement_text(entity.value, entity.location) do
+      with_replacement_text(entity.value, entity.location, normalize_eol: :never) do
         case context
         when :att_value
           parse_att_value_impl(quote: nil)
@@ -244,9 +265,9 @@ module XML
       end
     end
 
-    private def with_replacement_text(input : String, location : Location, &)
+    private def with_replacement_text(input : String, location : Location, normalize_eol : NormalizeEOL = @reader.normalize_eol, &)
       reader = @reader
-      @reader = CharReader.new(IO::Memory.new(input), @reader.normalize_eol, location)
+      @reader = Reader.new(IO::Memory.new(input), normalize_eol, location)
       begin
         yield
       ensure
@@ -254,7 +275,7 @@ module XML
       end
     end
 
-    def parse_attlist_decl : Nil
+    protected def parse_attlist_decl : Nil
       expect_whitespace
       element_name = parse_name
       skip_whitespace
@@ -271,7 +292,7 @@ module XML
       expect '>'
     end
 
-    def parse_att_type : Symbol | {Symbol, Array(String)}
+    protected def parse_att_type : Symbol | {Symbol, Array(String)}
       if @reader.consume?('C', 'D', 'A', 'T', 'A')
         :CDATA
       elsif @reader.consume?('I', 'D', 'R', 'E', 'F', 'S')
@@ -310,7 +331,7 @@ module XML
       list
     end
 
-    def parse_default_decl : Symbol | String
+    protected def parse_default_decl : Symbol | String
       if @reader.consume?('#', 'R', 'E', 'Q', 'U', 'I', 'R', 'E', 'D')
         return :REQUIRED
       end
@@ -325,7 +346,7 @@ module XML
       parse_att_value
     end
 
-    def parse_element_decl : Nil
+    protected def parse_element_decl : Nil
       expect_whitespace
       name = parse_name
       expect_whitespace
@@ -335,7 +356,7 @@ module XML
       @handlers.element_decl(name, model)
     end
 
-    def parse_content_spec
+    protected def parse_content_spec
       if @reader.consume?('E', 'M', 'P', 'T', 'Y')
         return ElementDecl::Empty.new
       end
@@ -424,7 +445,7 @@ module XML
       end
     end
 
-    def parse_entity_decl : Nil
+    protected def parse_entity_decl : Nil
       expect_whitespace
 
       if @reader.current? == '%'
@@ -469,7 +490,7 @@ module XML
       @handlers.entity_decl(entity)
     end
 
-    def parse_entity_value(quote : Char) : String
+    protected def parse_entity_value(quote : Char) : String
       while char = @reader.current?
         case char
         when quote
@@ -500,7 +521,7 @@ module XML
       value
     end
 
-    def parse_notation_decl : Nil
+    protected def parse_notation_decl : Nil
       expect_whitespace
       name = parse_name
       expect_whitespace
@@ -510,7 +531,7 @@ module XML
       @handlers.notation_decl(name, public_id, system_id)
     end
 
-    def parse_processing_instruction : Nil
+    protected def parse_processing_instruction : Nil
       target = parse_name
       if target.compare("xml", case_insensitive: true) == 0
         recoverable_error "PI: reserved prefix #{target.inspect}"
@@ -528,7 +549,7 @@ module XML
       @handlers.processing_instruction(target, data)
     end
 
-    def parse_comment : Nil
+    protected def parse_comment : Nil
       # WF: double hyphens (--) isn't allowed within comments
       # WF: grammar doesn't allow ---> to end comment
       data = consume_until do |char|
@@ -537,7 +558,7 @@ module XML
       @handlers.comment(data)
     end
 
-    def parse_content : Nil
+    protected def parse_content : Nil
       while char = @reader.current?
         if char == '<'
           if @reader.consume?('<', '!', '-', '-')
@@ -568,7 +589,7 @@ module XML
       end
     end
 
-    def parse_character_data : Nil
+    protected def parse_character_data : Nil
       while char = @reader.current?
         case char
         when '<'
@@ -592,7 +613,7 @@ module XML
       @buffer.clear
     end
 
-    def parse_character_reference : Nil
+    protected def parse_character_reference : Nil
       # keep current buffer pos so we can "rewind" on valid syntax, and have
       # nothing to do on invalid syntax (we pushed every char to the buffer)
       pos = @buffer.pos
@@ -645,7 +666,7 @@ module XML
       recoverable_error "Invalid character reference"
     end
 
-    def parse_entity_reference(context : Symbol, &) : Nil
+    protected def parse_entity_reference(context : Symbol, &) : Nil
       @reader.consume # '&'
 
       name = parse_name
@@ -671,12 +692,12 @@ module XML
       end
     end
 
-    def parse_cdata : Nil
+    protected def parse_cdata : Nil
       data = consume_until { @reader.consume?(']', ']', '>') }
       @handlers.cdata_section(data)
     end
 
-    def parse_name : String
+    protected def parse_name : String
       char = @reader.current
       fatal_error("Invalid name start char #{char.inspect}") unless name_start?(char)
 
@@ -693,7 +714,7 @@ module XML
       @name_buffer.clear
     end
 
-    def parse_nmtoken : String
+    protected def parse_nmtoken : String
       while (char = @reader.current?) && name?(char)
         @name_buffer << char
         @reader.consume
@@ -703,7 +724,7 @@ module XML
       @name_buffer.clear
     end
 
-    def parse_attributes : Array({String, String})
+    protected def parse_attributes : Array({String, String})
       attributes = [] of {String, String}
 
       loop do
@@ -727,7 +748,7 @@ module XML
       attributes
     end
 
-    def parse_att_value : String
+    protected def parse_att_value : String
       quote = expect '"', '\''
       parse_att_value_impl(quote)
     end
@@ -759,7 +780,7 @@ module XML
       @buffer.clear
     end
 
-    def parse_encoding : String
+    protected def parse_encoding : String
       quote = expect '"', '\''
       # WF: must start with `encname_start?` and continue with `encname?`
       value = consume_until { |char| char == quote }
@@ -767,13 +788,13 @@ module XML
       value
     end
 
-    def skip_whitespace : Nil
+    protected def skip_whitespace : Nil
       while (char = @reader.current?) && s?(char)
         @reader.consume
       end
     end
 
-    def expect_whitespace : Nil
+    protected def expect_whitespace : Nil
       if s?(@reader.current)
         while (char = @reader.current?) && s?(char)
           @reader.consume
@@ -807,63 +828,6 @@ module XML
 
     private def fatal_error(message : String)
       raise Error.new(message, @reader.location)
-    end
-
-    def location : Location
-      @reader.location
-    end
-
-    class Handlers
-      def xml_decl(version : String, encoding : String, standalone : Bool) : Nil
-      end
-
-      def start_doctype_decl(name : String, system_id : String?, public_id : String?, intsubset : Bool)
-      end
-
-      def end_doctype_decl : Nil
-      end
-
-      def attlist_decl(element_name : String, attribute_name : String, type : Symbol | {Symbol, Array(String)}, default : Symbol | String) : Nil
-      end
-
-      def element_decl(name : String, content : ElementDecl) : Nil
-      end
-
-      def entity_decl(entity : EntityDecl) : Nil
-      end
-
-      def notation_decl(name : String, public_id : String?, system_id : String?) : Nil
-      end
-
-      def processing_instruction(target : String, data : String) : Nil
-      end
-
-      def start_element(name : String, attributes : Array({String, String})) : Nil
-      end
-
-      def end_element(name : String) : Nil
-      end
-
-      def empty_element(name : String, attributes : Array({String, String})) : Nil
-        start_element(name, attributes)
-        end_element(name)
-      end
-
-      def character_data(data : String) : Nil
-      end
-
-      def entity_reference(name : String) : Nil
-      end
-
-      def comment(data : String) : Nil
-      end
-
-      def cdata_section(data : String) : Nil
-      end
-
-      def error(message : String, location : Location)
-        raise Error.new(message, location)
-      end
     end
   end
 end

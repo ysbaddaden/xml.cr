@@ -1,15 +1,18 @@
+# Copyright 2025 Julien PORTALIER
+# Distributed under the Apache-2.0 LICENSE
+
 module XML
   module Chars
     def quote?(char : Char?) : Bool
       char == '"' || char == '\''
     end
 
-    # https://www.w3.org/TR/xml11/#NT-S
+    # <https://www.w3.org/TR/xml11/#NT-S>
     def s?(char : Char) : Bool
       char.in?(' ', '\t', '\n', '\r')
     end
 
-    # https://www.w3.org/TR/xml11/#NT-Char
+    # <https://www.w3.org/TR/xml11/#NT-Char>
     def char?(char : Char?) : Bool
       case char
       when '\u0001'..'\uD7FF', '\uE000'..'\uFFFD', '\u{10000}'..'\u{10FFFF}'
@@ -19,7 +22,7 @@ module XML
       end
     end
 
-    # https://www.w3.org/TR/xml11/#NT-RestrictedChar
+    # <https://www.w3.org/TR/xml11/#NT-RestrictedChar>
     def restricted?(char : Char?) : Bool
       case char
       when '\u0001'..'\u0008', '\u000B'..'\u000C', '\u0086'..'\u009F',
@@ -30,7 +33,7 @@ module XML
       end
     end
 
-    # https://www.w3.org/TR/xml11/#NT-NameStartChar
+    # <https://www.w3.org/TR/xml11/#NT-NameStartChar>
     def name_start?(char : Char) : Bool
       case char
       when 'A'..'Z', 'a'..'z', ':', '_',
@@ -44,7 +47,7 @@ module XML
       end
     end
 
-    # https://www.w3.org/TR/xml11/#NT-NameChar
+    # <https://www.w3.org/TR/xml11/#NT-NameChar>
     def name?(char : Char?) : Bool
       case char
       when 'A'..'Z', 'a'..'z', '0'..'9', ':', '-', '.', '_', '\u00B7',
@@ -59,6 +62,7 @@ module XML
       end
     end
 
+    # <https://www.w3.org/TR/xml11/#NT-PubidChar>
     def pubid?(char : Char?) : Bool
       case char
       when 'a'..'z', 'A'..'Z', '0'..'9', '-', '\'', '(', ')', '+', ',', '.', '/',
@@ -69,6 +73,7 @@ module XML
       end
     end
 
+    # <https://www.w3.org/TR/xml11/#NT-EncName>
     def encname_start?(char : Char?) : Bool
       case char
       when 'a'..'z', 'A'..'Z'
@@ -78,6 +83,7 @@ module XML
       end
     end
 
+    # <https://www.w3.org/TR/xml11/#NT-EncName>
     def encname?(char : Char?) : Bool
       case char
       when 'a'..'z', 'A'..'Z', '0'..'9', '-', '.', '_'

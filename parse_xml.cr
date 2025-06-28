@@ -1,3 +1,6 @@
+# Copyright 2025 Julien PORTALIER
+# Distributed under the Apache-2.0 LICENSE
+
 require "./src/sax"
 
 class DebugHandlers < XML::SAX::Handlers
@@ -13,11 +16,11 @@ class DebugHandlers < XML::SAX::Handlers
     p [:raw_attlist_decl, element_name, attribute_name, type, default]
   end
 
-  def element_decl(name : String, content : XML::ElementDecl) : Nil
+  def element_decl(name : String, content : XML::SAX::ElementDecl) : Nil
     p [:element_decl, name, content]
   end
 
-  def entity_decl(entity : XML::EntityDecl) : Nil
+  def entity_decl(entity : XML::SAX::EntityDecl) : Nil
     p [:entity_decl, entity]
   end
 
