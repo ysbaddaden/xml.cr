@@ -166,17 +166,39 @@ module XML
             parse_processing_instruction
           elsif @reader.consume?('<', '!', '-', '-')
             parse_comment
+          else
+            # FIXME: unknown tag
           end
         when '%'
           @reader.consume
           name = parse_name
           expect ';'
-          # @handlers.entity_ref(name, parameter: true)
+          unless process_parameter_entity?(name)
+            recoverable_error("Unknown parameter entity #{name.inspect}")
+          end
         when ']'
           @reader.consume
           break
+        when nil
+          break
         end
       end
+    end
+
+    def process_parameter_entity?(name : String) : Bool
+      return false unless entity = @entities[name]?
+      return false unless entity.is_a?(EntityDecl::Internal)
+      return false unless entity.parameter?
+
+      input = IO::Memory.new(entity.value)
+      reader, @reader = @reader, CharReader.new(input, @reader.normalize_eol, entity.location)
+      begin
+        parse_intsubset
+      ensure
+        @reader = reader
+      end
+
+      true
     end
 
     def parse_attlist_decl : Nil
@@ -366,7 +388,9 @@ module XML
 
       case @reader.current?
       when '"', '\''
-        value = parse_entity_value(quote: @reader.consume)
+        quote = @reader.consume
+        location = @reader.location
+        value = parse_entity_value(quote)
       when 'P', 'S'
         public_id, system_id = parse_external_id
         skip_whitespace
@@ -381,7 +405,7 @@ module XML
 
       entity =
         if value
-          EntityDecl::Internal.new(name, parameter, value)
+          EntityDecl::Internal.new(name, parameter, value, location.not_nil!)
         elsif notation_id
           EntityDecl::Unparsed.new(name, public_id, system_id, notation_id)
         else
@@ -402,7 +426,7 @@ module XML
           if @reader.peek == '#'
             parse_character_reference
           else
-            # do not process entity ref
+            # do not process general entity ref
             @reader.consume
             @buffer << char
           end
@@ -410,9 +434,7 @@ module XML
           @reader.consume
           name = parse_name
           expect ';'
-          if (entity = @entities[name]?) && entity.is_a?(EntityDecl::Internal) && entity.parameter?
-            @buffer << entity.value
-          else
+          unless process_parameter_entity?(name)
             @buffer << '%' << name << ';'
           end
         else

@@ -3,8 +3,9 @@ module XML
     class Internal < EntityDecl
       property? parameter : Bool
       property value : String
+      property location : Location
 
-      def initialize(@name, @parameter, @value)
+      def initialize(@name, @parameter, @value, @location)
       end
     end
 

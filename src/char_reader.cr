@@ -14,9 +14,8 @@ module XML
     @current : Char?
     @buffer : Deque(Char)
 
-    def initialize(@io : IO, @normalize_eol : NormalizeEOL = :partial)
+    def initialize(@io : IO, @normalize_eol : NormalizeEOL = :partial, @location : Location = Location.new(1, 0))
       @buffer = Deque(Char).new(12)
-      @location = Location.new(1, 0)
     end
 
     # Returns the current char. Raises if EOF was reached. End-of-lines have been normalized.
