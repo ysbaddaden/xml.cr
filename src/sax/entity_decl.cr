@@ -34,9 +34,9 @@ module XML
       class Unparsed < EntityDecl
         property public_id : String?
         property system_id : String?
-        property notation_id : String
+        property notation_name : String
 
-        def initialize(@name, @public_id, @system_id, @notation_id)
+        def initialize(@name, @public_id, @system_id, @notation_name)
         end
 
         def external? : Bool

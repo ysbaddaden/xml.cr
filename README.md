@@ -5,9 +5,10 @@ An explanatory shard to handle XML (and later HTML) in pure Crystal.
 ## SAX (parser)
 
 The foundation parser is a _Simple API for XML_ parser, aka SAX. It's inspired
-by [The Expat XML parser API document]() (not its code) with adjustements for an
-Object Oriented languages, like a distinct `XML::SAX::Handlers` class for
-example.
+by [The Expat XML parser API
+document](https://libexpat.github.io/doc/api/latest/) (not its code) with
+adjustements for an Object Oriented languages, like a distinct
+`XML::SAX::Handlers` class for example.
 
 The choice for a SAX parser is because of its relative simplicity along with its
 extensible flexibility. The parser deals with the syntax, which you shouldn't
@@ -16,13 +17,29 @@ rest. You may generate a full blown DOM tree, decide to recover from errors, or
 validate the XML document, or stream a XML document while skipping over anything
 you don't care about.
 
+References:
+
+- <https://www.w3.org/TR/xml11/>
+- <https://www.w3.org/TR/xml/>
+- <https://www.w3.org/XML/Test/xmlconf-20080827.html>
+- <https://libexpat.github.io/doc/api/latest/>
+
 ## DOM
 
 ... TODO ...
 
+References:
+
+- <https://dom.spec.whatwg.org/>
+- <https://www.w3.org/TR/DOM-Level-3-Core/>
+
 ## XPATH 1.0
 
 ... TODO ...
+
+References:
+
+- <https://www.w3.org/TR/xpath-10/>
 
 ## LICENSE
 

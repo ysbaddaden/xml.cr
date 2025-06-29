@@ -12,8 +12,8 @@ class DebugHandlers < XML::SAX::Handlers
     p [:start_doctype_decl, name, system_id, public_id, intsubset]
   end
 
-  def attlist_decl(element_name : String, attribute_name : String, type : String | {Symbol, Array(String)}, default : Symbol | String) : Nil
-    p [:raw_attlist_decl, element_name, attribute_name, type, default]
+  def attlist_decl(element_name : String, attribute_name : String, type : Symbol, names : Array(String)?, default : Symbol, value : String?) : Nil
+    p [:attlist_decl, element_name, attribute_name, type, names, default, value]
   end
 
   def element_decl(name : String, content : XML::SAX::ElementDecl) : Nil

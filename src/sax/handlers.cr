@@ -31,10 +31,11 @@ module XML
       #
       # - *element_name* is the element name the attribute is declared for.
       # - *name* is the attribute name.
-      # - *type* is the attribute type as a symbol (e.g. `:CDATA`, `IDREFS` or
-      #   `NMTOKEN`) or a tuple for `{:NOTATION, names}` and `{:ENUMERATION, names}`.
-      # - *default* can be `:REQUIRED`, `:IMPLIED` or the default value (for FIXED).
-      def attlist_decl(element_name : String, name : String, type : Symbol | {Symbol, Array(String)}, default : Symbol | String) : Nil
+      # - *type* is the attribute type as a symbol, for example `:CDATA`, `:IDREFS`, `:NOTATION` or `:ENUMERATION`.
+      # - *names* an array of names if type is `:NOTATION` or `:ENUMERATION`, nil otherwise.
+      # - *default* can be `:REQUIRED`, `:IMPLIED` or `:FIXED`.
+      # - *value* is the default value when *default* is `:FIXED`, nil otherwise.
+      def attlist_decl(element_name : String, name : String, type : Symbol, names : Array(String)?, default : Symbol, value : String?) : Nil
       end
 
       # Called for element declarations in a DTD.

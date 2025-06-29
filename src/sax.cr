@@ -40,7 +40,7 @@ module XML
       @reader.location
     end
 
-    # Parses the whole XML document.
+    # Parses IO as a XML document.
     #
     # Raises `Error` on fatal errors.
     def parse : Nil
@@ -195,7 +195,7 @@ module XML
           name = parse_name
           expect ';'
           unless process_parameter_entity?(name)
-            recoverable_error("Unknown parameter entity #{name.inspect}")
+            # skip unknown or external parameter entity
           end
         when ']'
           @reader.consume
@@ -212,6 +212,9 @@ module XML
     #
     # NOTE: The entity must be an internal entity. External entities can't be
     # processed, (yet).
+    #
+    # TODO: execute a callback when trying to process an external entity so
+    # handlers can decide to parse the external entity (or not)
     protected def process_parameter_entity?(name : String) : Bool
       return false unless entity = @entities[name]?
       return false unless entity.parameter?
@@ -238,6 +241,9 @@ module XML
     #
     # NOTE: The entity must be an internal entity. External entities can't be
     # processed, (yet).
+    #
+    # TODO: execute a callback when trying to process an external entity so
+    # handlers can decide to parse the external entity (or not)
     protected def process_general_entity?(name : String, context : Symbol) : Bool
       return false unless entity = @entities[name]?
       return false unless entity.is_a?(EntityDecl::Internal)
@@ -283,32 +289,32 @@ module XML
       until @reader.current? == '>'
         name = parse_name
         expect_whitespace
-        type = parse_att_type
+        type, names = parse_att_type
         expect_whitespace
-        default = parse_default_decl
-        @handlers.attlist_decl(element_name, name, type, default)
+        default, value = parse_default_decl
+        @handlers.attlist_decl(element_name, name, type, names, default, value)
         skip_whitespace
       end
       expect '>'
     end
 
-    protected def parse_att_type : Symbol | {Symbol, Array(String)}
+    protected def parse_att_type : {Symbol, Array(String)?}
       if @reader.consume?('C', 'D', 'A', 'T', 'A')
-        :CDATA
+        {:CDATA, nil}
       elsif @reader.consume?('I', 'D', 'R', 'E', 'F', 'S')
-        :IDREF
+        {:IDREF, nil}
       elsif @reader.consume?('I', 'D', 'R', 'E', 'F')
-        :IDREF
+        {:IDREF, nil}
       elsif @reader.consume?('I', 'D')
-        :ID
+        {:ID, nil}
       elsif @reader.consume?('E', 'N', 'T', 'I', 'T', 'I', 'E', 'S')
-        :ENTITIES
+        {:ENTITIES, nil}
       elsif @reader.consume?('E', 'N', 'T', 'I', 'T', 'Y')
-        :ENTITY
+        {:ENTITY, nil}
       elsif @reader.consume?('N', 'M', 'T', 'O', 'K', 'E', 'N', 'S')
-        :NMTOKENS
+        {:NMTOKENS, nil}
       elsif @reader.consume?('N', 'M', 'T', 'O', 'K', 'E', 'N')
-        :NMTOKEN
+        {:NMTOKEN, nil}
       elsif @reader.consume?('N', 'O', 'T', 'A', 'T', 'I', 'O', 'N')
         expect_whitespace
         names = parse_att_list { parse_name }
@@ -331,19 +337,19 @@ module XML
       list
     end
 
-    protected def parse_default_decl : Symbol | String
+    protected def parse_default_decl : {Symbol, String?}
       if @reader.consume?('#', 'R', 'E', 'Q', 'U', 'I', 'R', 'E', 'D')
-        return :REQUIRED
+        return {:REQUIRED, nil}
       end
 
       if @reader.consume?('#', 'I', 'M', 'P', 'L', 'I', 'E', 'D')
-        return :IMPLIED
+        return {:IMPLIED, nil}
       end
 
       if @reader.consume?('#', 'F', 'I', 'X', 'E', 'D')
         expect_whitespace
       end
-      parse_att_value
+      {:FIXED, parse_att_value}
     end
 
     protected def parse_element_decl : Nil
@@ -470,7 +476,7 @@ module XML
         skip_whitespace
         if @reader.consume?('N', 'D', 'A', 'T', 'A')
           expect_whitespace
-          notation_id = parse_name
+          notation_name = parse_name
         end
       end
 
@@ -480,8 +486,8 @@ module XML
       entity =
         if value
           EntityDecl::Internal.new(name, parameter, value, location.not_nil!)
-        elsif notation_id
-          EntityDecl::Unparsed.new(name, public_id, system_id, notation_id)
+        elsif notation_name
+          EntityDecl::Unparsed.new(name, public_id, system_id, notation_name)
         else
           EntityDecl::External.new(name, parameter, public_id, system_id)
         end
