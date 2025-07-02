@@ -45,7 +45,7 @@ module XML
       new(Reader.new(io), handlers, entities)
     end
 
-    private def initialize(@reader : Reader, @handlers : Handlers, @entities = Entities.new)
+    protected def initialize(@reader : Reader, @handlers : Handlers, @entities = Entities.new)
       @buffer = IO::Memory.new
       @name_buffer = IO::Memory.new
       @string_pool = StringPool.new
@@ -84,10 +84,8 @@ module XML
       parse_content
     end
 
-    # Parse IO as an external General Entity (GE).
-    #
-    # Raises `Error` on fatal errors.
-    def parse_external_entity : Nil
+    # Parse IO as a General Entity (GE).
+    protected def parse_external_general_entity : Nil
       @reader.normalize_eol = :always
       @reader.autodetect_encoding!
 
@@ -97,6 +95,20 @@ module XML
       end
 
       parse_content
+    end
+
+    # Parse IO as an external Doctype.
+    #
+    # NOTE: `@reader` must be an ExtSubsetReader.
+    protected def parse_external_dtd : Nil
+      @reader.autodetect_encoding!
+
+      if @reader.consume?('<', '?', 'x', 'm', 'l')
+        expect_whitespace
+        parse_text_decl
+      end
+
+      parse_extsubset
     end
 
     protected def parse_xml_decl : Nil
@@ -186,14 +198,21 @@ module XML
       @handlers.start_doctype_decl(name, system_id, public_id, intsubset)
 
       parse_intsubset if intsubset
-      if system_id
-        # TODO: parse external doctype definition (needs support for extsubset)
-      end
+      parse_external_doctype(system_id) if system_id
 
       skip_whitespace
       expect '>'
 
       @handlers.end_doctype_decl
+    end
+
+    private def parse_external_doctype(system_id : String) : Nil
+      @handlers.open_external(@base, system_id) do |path, io|
+        reader = ExtSubsetReader.new(io, ->pe_callback(String))
+        sax = XML::SAX.new(reader, @handlers, @entities)
+        sax.base = File.dirname(path)
+        sax.parse_external_dtd
+      end
     end
 
     protected def parse_external_id(loose_system_id = false) : {String?, String?}
@@ -242,7 +261,6 @@ module XML
       parse_subset(ext: true)
     end
 
-    # TODO: extsubset can have PE refs within markupdecl, replacing one or many tokens
     protected def parse_subset(ext : Bool) : Nil
       loop do
         skip_whitespace
@@ -277,15 +295,19 @@ module XML
           break
         when nil
           break
+        else
+          fatal_error "Unexpected #{char.inspect} in DTD"
         end
       end
     end
 
     protected def parse_conditional_section : Nil
+      @reader.auto_expand_pe_refs = true
       skip_whitespace
 
       if @reader.consume?('I', 'G', 'N', 'O', 'R', 'E')
         skip_whitespace
+        @reader.auto_expand_pe_refs = false
         expect '['
 
         count = 1
@@ -300,6 +322,7 @@ module XML
         end
       elsif @reader.consume?('I', 'N', 'C', 'L', 'U', 'D', 'E')
         skip_whitespace
+        @reader.auto_expand_pe_refs = false
         expect '['
 
         parse_extsubset
@@ -312,27 +335,49 @@ module XML
       end
     end
 
-    protected def expand_parameter_entity?(name : String) : Bool
+    protected def expand_parameter_entity?(name : String, literal = false) : Bool
       return false unless entity = valid_entity? { @entities.parameter?(name) }
 
       expanding?(entity) do
         if entity.external?
-          # TODO: parse external parameter entity as extsubset
+          @handlers.open_external(@base, entity.system_id) do |path, io|
+            with_reader(ExtSubsetReader.new(io, ->pe_callback(String)), base: File.dirname(path)) do
+              parse_external_dtd
+            end
+            return true
+          end
           return false
         end
 
-        if entity.needs_expansion?
-          with_replacement_text(entity.value, entity.location) do
-            # FIXME: depending on where the entity was defined, it might an
-            # intsubset or an extsubset
+        with_reader(Reader.new(IO::Memory.new(entity.value), location: entity.location)) do
+          # FIXME: depending on where the entity was declared, it might be an
+          # intsubset or an extsubset
+          if literal
+            parse_entity_value(quote: nil)
+          else
             parse_extsubset
           end
-        else
-          @buffer << entity.value
         end
 
         true
       end
+    end
+
+    private def pe_callback(name : String) : IO?
+      return unless entity = valid_entity? { @entities.parameter?(name) }
+
+      expanding?(entity) do
+        if entity.internal?
+          return IO::Memory.new(entity.value)
+        end
+
+        if ret = @handlers.open_external(@base, entity.system_id)
+          _, io = ret
+          return io
+        end
+      end
+
+      nil
     end
 
     protected def expand_general_entity?(name : String, context : Symbol) : Bool
@@ -349,46 +394,23 @@ module XML
           @handlers.open_external(@base, entity.system_id) do |path, io|
             sax = XML::SAX.new(io, @handlers, @entities)
             sax.base = File.dirname(path)
-            sax.parse_external_entity
+            sax.parse_external_general_entity
             return true
           end
 
           return false
         end
 
-        if entity.needs_expansion?
-          with_replacement_text(entity.value, entity.location, :never) do
-            if context == :att_value
-              parse_att_value_impl(quote: nil)
-            else
-              parse_content
-            end
+        with_reader(Reader.new(IO::Memory.new(entity.value), :never, entity.location)) do
+          if context == :att_value
+            parse_att_value_impl(quote: nil)
+          else
+            parse_content
           end
-        else
-          @buffer << entity.value
         end
 
         true
       end
-    end
-
-    private def pe_replacement_text(name : String) : String?
-      return unless entity = valid_entity? { @entities.parameter?(name) }
-      value = nil
-
-      expanding?(entity) do
-        if entity.internal?
-          value = entity.value
-        else
-          @handlers.open_external(@base, entity.system_id) do |path, io|
-            sax = XML::SAX.new(io, @handlers, @entities)
-            sax.base = File.dirname(path)
-            value = sax.parse_external_entity_as_replacement_text
-          end
-        end
-      end
-
-      value
     end
 
     private def valid_entity?(&) : Entity?
@@ -422,17 +444,23 @@ module XML
       end
     end
 
-    private def with_replacement_text(input : String, location : Location, normalize_eol : NormalizeEOL = @reader.normalize_eol, &)
-      reader = @reader
-      @reader = Reader.new(IO::Memory.new(input), normalize_eol, location)
+    private def with_reader(reader : Reader, base : String? = nil, &)
+      reader_, @reader = @reader, reader
+      if base
+        base_, @base = @base, base
+      end
+
       begin
         yield
       ensure
-        @reader = reader
+        @reader = reader_
+        @base = base_ if base
       end
     end
 
     protected def parse_attlist_decl : Nil
+      @reader.auto_expand_pe_refs = true
+
       expect_whitespace
       element_name = parse_name
       skip_whitespace
@@ -446,6 +474,8 @@ module XML
         @handlers.attlist_decl(element_name, name, type, names, default, value)
         skip_whitespace
       end
+      @reader.auto_expand_pe_refs = false
+
       expect '>'
     end
 
@@ -500,16 +530,25 @@ module XML
       if @reader.consume?('#', 'F', 'I', 'X', 'E', 'D')
         expect_whitespace
       end
-      {:FIXED, parse_att_value}
+
+      @reader.auto_expand_pe_refs = false
+      value = parse_att_value
+      @reader.auto_expand_pe_refs = true
+
+      {:FIXED, value}
     end
 
     protected def parse_element_decl : Nil
+      @reader.auto_expand_pe_refs = true
+
       expect_whitespace
       name = parse_name
       expect_whitespace
       model = parse_content_spec
       skip_whitespace
       expect '>'
+
+      @reader.auto_expand_pe_refs = false
       @handlers.element_decl(name, model)
     end
 
@@ -603,6 +642,8 @@ module XML
     end
 
     protected def parse_entity_decl : Nil
+      @reader.auto_expand_pe_refs = true
+
       expect_whitespace
 
       if @reader.current? == '%'
@@ -620,7 +661,9 @@ module XML
         when '"', '\''
           quote = @reader.consume
           location = @reader.location
+          @reader.auto_expand_pe_refs = false
           value = parse_entity_value(quote)
+          @reader.auto_expand_pe_refs = true
           @entities.add(parameter, name, value, nil, nil, nil, location)
         else
           public_id, system_id = parse_external_id
@@ -637,10 +680,11 @@ module XML
       skip_whitespace
       expect '>'
 
+      @reader.auto_expand_pe_refs = false
       @handlers.entity_decl(entity)
     end
 
-    protected def parse_entity_value(quote : Char) : String
+    protected def parse_entity_value(quote : Char?) : String
       while char = @reader.current?
         case char
         when quote
@@ -658,7 +702,7 @@ module XML
           @reader.consume
           name = parse_name
           expect ';'
-          unless expand_parameter_entity?(name)
+          unless expand_parameter_entity?(name, literal: true)
             @buffer << '%' << name << ';'
           end
         else
@@ -666,18 +710,29 @@ module XML
           @reader.consume
         end
       end
-      value = @buffer.to_s
-      @buffer.clear
-      value
+
+      # HACK: quote is nil when parsing a PERef in an EntityValue, in that case
+      # we keep the buffer intact and don't bother generating a string
+      if quote
+        @buffer.to_s
+      else
+        ""
+      end
+    ensure
+      @buffer.clear if quote
     end
 
     protected def parse_notation_decl : Nil
+      @reader.auto_expand_pe_refs = true
+
       expect_whitespace
       name = parse_name
       expect_whitespace
       public_id, system_id = parse_external_id(loose_system_id: true)
       skip_whitespace
       expect '>'
+
+      @reader.auto_expand_pe_refs = false
       @handlers.notation_decl(name, public_id, system_id)
     end
 

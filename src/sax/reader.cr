@@ -202,12 +202,107 @@ module XML
         @io.seek(0, IO::Seek::Set)
       end
 
-      private def io_read_char
+      private def io_read_char : Char?
+        io_read_char_impl
+      end
+
+      private def io_read_char_impl : Char?
         {% if flag?(:DEBUG) %}
           p @io.read_char
         {% else %}
           @io.read_char
         {% end %}
+      end
+
+      protected def auto_expand_pe_refs=(value : Bool) : Bool
+        value
+      end
+    end
+
+    # :nodoc:
+    #
+    # Alternative Reader that detects the presence of parameter entities in the
+    # IO and immediately processes its replacement text instead of the IO, with
+    # a leading and trailing space around the entity.
+    #
+    # HACK: this isn't the prettiest solution, but it kinda works. The SAX
+    # parser only enables the detection and expansion of entities where they are
+    # expected to be, which allows us to have PE references within markupdecl.
+    # It's probably not very well-formed, though.
+    class ExtSubsetReader < Reader
+      @io_peek_char : Char?
+
+      def initialize(io : IO, @pe_callback : String -> IO?)
+        super io, :always
+        @replaced = [] of IO
+      end
+
+      protected def auto_expand_pe_refs=(value : Bool) : Bool
+        @auto_expand_pe_refs = value
+      end
+
+      private def io_read_char : Char?
+        if char = @io_peek_char
+          @io_peek_char = nil
+        else
+          char = super
+        end
+
+        if char.nil? && (io = @replaced.pop?)
+          # finished PE replacement text
+          @io.close
+          @io = io
+          return 0x20.chr # inject trailing space
+        end
+
+        if @auto_expand_pe_refs && (char == '%') && (peek_char = super)
+          if Chars.name_start?(peek_char)
+            name = io_parse_name(peek_char)
+
+            if io = @pe_callback.call(name)
+              @replaced << @io
+              @io = io
+              autodetect_encoding!
+              io_parse_text_decl
+              return 0x20.chr # inject leading space
+            end
+          else
+            @io_peek_char = peek_char
+          end
+        end
+
+        char
+      end
+
+      private def io_parse_name(char : Char) : String
+        String.build do |str|
+          str << char
+          until (char = io_read_char_impl) == ';'
+            raise Error.new("Reached EOF", @location) unless char
+            str << char
+          end
+        end
+      end
+
+      private def io_parse_text_decl : Nil
+        pos = @io.pos
+
+        {'<', '?', 'x', 'm', 'l'}.each do |char|
+          unless io_read_char_impl == char
+            @io.seek(pos, IO::Seek::Set)
+            return
+          end
+        end
+
+        if (char = io_read_char_impl) && Chars.s?(char)
+          @io.seek(pos, IO::Seek::Set)
+          return
+        end
+
+        until io_read_char_impl == '>'
+          # skip
+          # todo: parse version and encoding attributes
+        end
       end
     end
   end

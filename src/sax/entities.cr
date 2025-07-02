@@ -11,10 +11,6 @@ module XML
 
       # :nodoc:
       def initialize(@parameter : Bool, @name : String, @value : String?, @public_id : String?, @system_id : String?, @notation_name : String?, @location : Location?)
-        @needs_expansion = !value.nil? && (
-          value.includes?('<') ||
-          value.includes?('&') ||
-          (parameter && value.includes?('%')))
       end
 
       def general? : Bool
@@ -39,10 +35,6 @@ module XML
 
       def unparsed? : Bool
         !@notation_name.nil?
-      end
-
-      def needs_expansion? : Bool
-        @needs_expansion
       end
     end
 

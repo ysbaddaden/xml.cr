@@ -108,8 +108,11 @@ module XML
 
       # Called when trying to open an external entity or doctype.
       #
-      # You can
+      # The IO should be closed after the block has returned.
       def open_external(base : String?, uri : String, & : (String, IO) ->) : Nil
+      end
+
+      def open_external(base : String?, uri : String) : {String, IO}?
       end
 
       # Called when trying to expand an undeclared or invalid entity within
