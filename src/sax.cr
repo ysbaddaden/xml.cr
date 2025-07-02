@@ -307,6 +307,8 @@ module XML
         unless @reader.consume?(']', '>')
           fatal_error "Unexpected ']'"
         end
+      else
+        fatal_error "Unexpected #{@reader.current?.inspect}"
       end
     end
 
