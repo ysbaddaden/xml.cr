@@ -7,9 +7,16 @@ module XML
       # Called for XML declarations.
       #
       # - *version* defaults to `"1.0"`.
-      # - *encoding* may be nil, in which case the parser assumes UTF-8.
+      # - *encoding* may be nil, in which case the parser assumes UTF-8 or the detected encoding.
       # - *standalone* will be nil when unspecified.
       def xml_decl(version : String, encoding : String?, standalone : Bool?) : Nil
+      end
+
+      # Called for text declarations in parsed external entities.
+      #
+      # - *version* defaults to `"1.0"`.
+      # - *encoding* may be nil, in which case the parser assumes UTF-8 or the detected encoding.
+      def text_decl(version : String, encoding : String?) : Nil
       end
 
       # Called at the start of a DOCTYPE declaration.
@@ -48,7 +55,7 @@ module XML
       # Called for entity declarations in a DTD.
       #
       # - *entity* is the declared entity definition.
-      def entity_decl(entity : EntityDecl) : Nil
+      def entity_decl(entity : Entity) : Nil
       end
 
       # Called for notation declarations in a DTD.
@@ -99,10 +106,15 @@ module XML
       def character_data(data : String) : Nil
       end
 
-      # Called when an external entity references occurs in character data.
+      # Called when trying to open an external entity or doctype.
       #
-      # Entity references are automatically expanded
-      def entity_reference(name : String) : Nil
+      # You can
+      def open_external(base : String?, uri : String, & : (String, IO) ->) : Nil
+      end
+
+      # Called when trying to expand an undeclared or invalid entity within
+      # character data.
+      def entity_reference(name : String)
       end
 
       # Called for comments.

@@ -3,6 +3,8 @@
 
 module XML
   module Chars
+    extend self
+
     def quote?(char : Char?) : Bool
       char == '"' || char == '\''
     end

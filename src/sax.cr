@@ -4,7 +4,7 @@
 require "string_pool"
 require "./chars"
 require "./sax/element_decl"
-require "./sax/entity_decl"
+require "./sax/entities"
 require "./sax/handlers"
 require "./sax/reader"
 
@@ -24,15 +24,31 @@ module XML
   # tree without declarations, comments or processing instructions.
   #
   # See `Handlers` for the list of methods that will be called during parsing.
+  #
+  # TODO: options to enable parsing entities, etc.
   class SAX
     include Chars
 
-    def initialize(io : IO, @handlers : Handlers)
-      @reader = Reader.new(io)
+    def base : String
+      @base.not_nil!
+    end
+
+    def base? : String?
+      @base
+    end
+
+    def base=(value : String?)
+      @base = value
+    end
+
+    def self.new(io : IO, handlers : Handlers, entities = Entities.new)
+      new(Reader.new(io), handlers, entities)
+    end
+
+    private def initialize(@reader : Reader, @handlers : Handlers, @entities = Entities.new)
       @buffer = IO::Memory.new
       @name_buffer = IO::Memory.new
       @string_pool = StringPool.new
-      @entities = {} of String => EntityDecl
     end
 
     # Returns the current location.
@@ -40,7 +56,7 @@ module XML
       @reader.location
     end
 
-    # Parses IO as a XML document.
+    # Parse IO as a XML document.
     #
     # Raises `Error` on fatal errors.
     def parse : Nil
@@ -63,6 +79,21 @@ module XML
         else
           break
         end
+      end
+
+      parse_content
+    end
+
+    # Parse IO as an external General Entity (GE).
+    #
+    # Raises `Error` on fatal errors.
+    def parse_external_entity : Nil
+      @reader.normalize_eol = :always
+      @reader.autodetect_encoding!
+
+      if @reader.consume?('<', '?', 'x', 'm', 'l')
+        expect_whitespace
+        parse_text_decl
       end
 
       parse_content
@@ -101,8 +132,39 @@ module XML
 
       @reader.set_encoding(encoding) unless encoding.nil? || encoding.blank?
       @reader.normalize_eol = :always if version == "1.1"
-
       @handlers.xml_decl(version, encoding, standalone)
+    end
+
+    protected def parse_text_decl : Nil
+      version, encoding = "1.0", nil
+
+      loop do
+        if @reader.current? == '?'
+          @reader.consume
+          expect '>'
+          break
+        end
+
+        attr_name = parse_name
+        skip_whitespace
+        expect '='
+        skip_whitespace
+
+        case attr_name
+        when "version"
+          # WF: value can only b "1.0", '1.0', "1.1" or '1.1'
+          version = parse_att_value
+        when "encoding"
+          encoding = parse_encoding
+        else
+          recoverable_error("XMLDECL: unexpected attribute #{attr_name.inspect}")
+        end
+
+        skip_whitespace
+      end
+
+      @reader.set_encoding(encoding) unless encoding.nil? || encoding.blank?
+      @handlers.text_decl(version, encoding)
     end
 
     protected def parse_doctype_decl : Nil
@@ -124,6 +186,9 @@ module XML
       @handlers.start_doctype_decl(name, system_id, public_id, intsubset)
 
       parse_intsubset if intsubset
+      if system_id
+        # TODO: parse external doctype definition (needs support for extsubset)
+      end
 
       skip_whitespace
       expect '>'
@@ -170,6 +235,15 @@ module XML
     end
 
     protected def parse_intsubset : Nil
+      parse_subset(ext: false)
+    end
+
+    protected def parse_extsubset : Nil
+      parse_subset(ext: true)
+    end
+
+    # TODO: extsubset can have PE refs within markupdecl, replacing one or many tokens
+    protected def parse_subset(ext : Bool) : Nil
       loop do
         skip_whitespace
 
@@ -187,16 +261,17 @@ module XML
             parse_processing_instruction
           elsif @reader.consume?('<', '!', '-', '-')
             parse_comment
+          elsif @reader.consume?('<', '!', '[')
+            recoverable_error "Unexpected conditional section outside of extsubset" unless ext
+            parse_conditional_section
           else
-            # FIXME: unknown tag
+            fatal_error "Unknown declaration"
           end
         when '%'
           @reader.consume
           name = parse_name
           expect ';'
-          unless process_parameter_entity?(name)
-            # skip unknown or external parameter entity
-          end
+          expand_parameter_entity?(name)
         when ']'
           @reader.consume
           break
@@ -206,68 +281,142 @@ module XML
       end
     end
 
-    # Searches the parameter entity for *name* and processes its replacement
-    # text when found. Returns true if the entity's value has been processed,
-    # false otherwise.
-    #
-    # NOTE: The entity must be an internal entity. External entities can't be
-    # processed, (yet).
-    #
-    # TODO: execute a callback when trying to process an external entity so
-    # handlers can decide to parse the external entity (or not)
-    protected def process_parameter_entity?(name : String) : Bool
-      return false unless entity = @entities[name]?
-      return false unless entity.parameter?
-      return false unless entity.is_a?(EntityDecl::Internal)
+    protected def parse_conditional_section : Nil
+      skip_whitespace
 
-      process_parameter_entity(entity)
-      true
-    end
+      if @reader.consume?('I', 'G', 'N', 'O', 'R', 'E')
+        skip_whitespace
+        expect '['
 
-    # Processes the internal *entity* as a parameter entity (DTD).
-    protected def process_parameter_entity(entity : EntityDecl::Internal) : Nil
-      unless entity.needs_processing?
-        @buffer << entity.value
-        return
-      end
-      with_replacement_text(entity.value, entity.location) do
-        parse_intsubset
-      end
-    end
-
-    # Searches the general entity for *name* and processes its replacement text
-    # when found. Returns true if the entity's value has been processed, false
-    # otherwise.
-    #
-    # NOTE: The entity must be an internal entity. External entities can't be
-    # processed, (yet).
-    #
-    # TODO: execute a callback when trying to process an external entity so
-    # handlers can decide to parse the external entity (or not)
-    protected def process_general_entity?(name : String, context : Symbol) : Bool
-      return false unless entity = @entities[name]?
-      return false unless entity.is_a?(EntityDecl::Internal)
-      return false if entity.parameter?
-
-      process_general_entity(entity, context)
-      true
-    end
-
-    # Processes the internal *entity* as a general entity (content).
-    protected def process_general_entity(entity : EntityDecl::Internal, context : Symbol) : Nil
-      unless entity.needs_processing?
-        @buffer << entity.value
-        return
-      end
-      with_replacement_text(entity.value, entity.location, normalize_eol: :never) do
-        case context
-        when :att_value
-          parse_att_value_impl(quote: nil)
-        when :element
-          parse_content
-        else
-          raise "unreachable"
+        count = 1
+        while count > 0
+          if @reader.consume?('<', '!', '[')
+            count += 1
+          elsif @reader.consume?(']', ']', '>')
+            count -= 1
+          else
+            @reader.consume
+          end
         end
+      elsif @reader.consume?('I', 'N', 'C', 'L', 'U', 'D', 'E')
+        skip_whitespace
+        expect '['
+
+        parse_extsubset
+
+        unless @reader.consume?(']', '>')
+          fatal_error "Unexpected ']'"
+        end
+      end
+    end
+
+    protected def expand_parameter_entity?(name : String) : Bool
+      return false unless entity = valid_entity? { @entities.parameter?(name) }
+
+      expanding?(entity) do
+        if entity.external?
+          # TODO: parse external parameter entity as extsubset
+          return false
+        end
+
+        if entity.needs_expansion?
+          with_replacement_text(entity.value, entity.location) do
+            # FIXME: depending on where the entity was defined, it might an
+            # intsubset or an extsubset
+            parse_extsubset
+          end
+        else
+          @buffer << entity.value
+        end
+
+        true
+      end
+    end
+
+    protected def expand_general_entity?(name : String, context : Symbol) : Bool
+      return false unless entity = valid_entity? { @entities.general?(name) }
+
+      expanding?(entity) do
+        if entity.external?
+          if context == :att_value
+            # WF: No External Entity References
+            recoverable_error "Cannot expand external entity in attribute value."
+            return false
+          end
+
+          @handlers.open_external(@base, entity.system_id) do |path, io|
+            sax = XML::SAX.new(io, @handlers, @entities)
+            sax.base = File.dirname(path)
+            sax.parse_external_entity
+            return true
+          end
+
+          return false
+        end
+
+        if entity.needs_expansion?
+          with_replacement_text(entity.value, entity.location, :never) do
+            if context == :att_value
+              parse_att_value_impl(quote: nil)
+            else
+              parse_content
+            end
+          end
+        else
+          @buffer << entity.value
+        end
+
+        true
+      end
+    end
+
+    private def pe_replacement_text(name : String) : String?
+      return unless entity = valid_entity? { @entities.parameter?(name) }
+      value = nil
+
+      expanding?(entity) do
+        if entity.internal?
+          value = entity.value
+        else
+          @handlers.open_external(@base, entity.system_id) do |path, io|
+            sax = XML::SAX.new(io, @handlers, @entities)
+            sax.base = File.dirname(path)
+            value = sax.parse_external_entity_as_replacement_text
+          end
+        end
+      end
+
+      value
+    end
+
+    private def valid_entity?(&) : Entity?
+      entity = yield
+
+      unless entity
+        # WF: Entity Declared.
+        recoverable_error "Cannot expand undeclared entity."
+        return
+      end
+
+      if entity.unparsed?
+        # WF: Parsed Entity.
+        recoverable_error "Cannot expand unparsed entity."
+        return
+      end
+
+      entity
+    end
+
+    # Remembers that we're expanding this entity for the duration of the
+    # *block*. Aborts if we're already expanding said entity to avoid infinite
+    # recursion because of a direct or indirect reference.
+    private def expanding?(entity : Entity, &) : Bool
+      if @entities.expanding?(entity) { yield }
+        # WF: No Recursive.
+        recoverable_error "Cannot expand recursive reference to parsed entity."
+        false
+      else
+        true
       end
     end
 
@@ -464,35 +613,28 @@ module XML
       name = parse_name
       expect_whitespace
 
-      case @reader.current?
-      when '"', '\''
-        # OPTIMIZE: determine and remember if value (replacement text) is
-        # character data or more complex (it contains any of '&' or '%' or '<')
-        quote = @reader.consume
-        location = @reader.location
-        value = parse_entity_value(quote)
-      when 'P', 'S'
-        public_id, system_id = parse_external_id
-        skip_whitespace
-        if @reader.consume?('N', 'D', 'A', 'T', 'A')
-          expect_whitespace
-          notation_name = parse_name
+      entity =
+        case @reader.current?
+        when '"', '\''
+          quote = @reader.consume
+          location = @reader.location
+          value = parse_entity_value(quote)
+          @entities.add(parameter, name, value, nil, nil, nil, location)
+        else
+          public_id, system_id = parse_external_id
+          skip_whitespace
+          if @reader.consume?('N', 'D', 'A', 'T', 'A')
+            expect_whitespace
+            notation_name = parse_name
+            @entities.add(parameter, name, nil, public_id, system_id, notation_name, nil)
+          else
+            @entities.add(parameter, name, nil, public_id, system_id, nil, nil)
+          end
         end
-      end
 
       skip_whitespace
       expect '>'
 
-      entity =
-        if value
-          EntityDecl::Internal.new(name, parameter, value, location.not_nil!)
-        elsif notation_name
-          EntityDecl::Unparsed.new(name, public_id, system_id, notation_name)
-        else
-          EntityDecl::External.new(name, parameter, public_id, system_id)
-        end
-
-      @entities[name] = entity
       @handlers.entity_decl(entity)
     end
 
@@ -514,7 +656,7 @@ module XML
           @reader.consume
           name = parse_name
           expect ';'
-          unless process_parameter_entity?(name)
+          unless expand_parameter_entity?(name)
             @buffer << '%' << name << ';'
           end
         else
@@ -604,9 +746,9 @@ module XML
           if @reader.peek == '#'
             parse_character_reference
           else
+            @handlers.character_data(@buffer.to_s) if @buffer.size > 0
+            @buffer.clear
             parse_entity_reference(:element) do |name|
-              @handlers.character_data(@buffer.to_s) if @buffer.size > 0
-              @buffer.clear
               @handlers.entity_reference(name)
             end
           end
@@ -687,7 +829,7 @@ module XML
         when "apos" then @buffer << '\''
         when "quot" then @buffer << '"'
         else
-          unless process_general_entity?(name, context)
+          unless expand_general_entity?(name, context)
             yield name
           end
         end
@@ -765,19 +907,20 @@ module XML
           @reader.consume
           break
         end
-        case char
-        when '&'
+
+        if char == '&'
           if @reader.peek == '#'
             parse_character_reference
           else
             parse_entity_reference(:att_value) do |name|
-              @buffer << '&'
-              @buffer << name
-              @buffer << ';'
+              @buffer << '&' << name << ';'
             end
           end
         else
-          @buffer << char
+          recoverable_error "Attribute value cannot contain '<'" if char == '<'
+
+          # normalize whitespace <https://www.w3.org/TR/xml11/#AVNormalize>
+          @buffer << (s?(char) ? 0x20.chr : char)
           @reader.consume
         end
       end

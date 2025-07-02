@@ -13,7 +13,7 @@ module XML
     end
 
     # :nodoc:
-    struct Reader
+    class Reader
       getter location : Location
       property normalize_eol : NormalizeEOL
       @current : Char?

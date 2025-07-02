@@ -4,6 +4,18 @@
 require "./src/sax"
 
 class DebugHandlers < XML::SAX::Handlers
+  ROOT_PATH = Path.new(Dir.current)
+
+  def open_external_file(uri : String, &block : IO ->) : Nil
+    if uri =~ %r{^(\w+)://(.*)$}
+      return unless $1 == "file"
+      uri = $2
+    end
+    if (ROOT_PATH.join(uri).expand <=> ROOT_PATH).positive?
+      File.open(uri, &block)
+    end
+  end
+
   def xml_decl(version : String, encoding : String, standalone : Bool) : Nil
     p [:xml_decl, version, encoding, standalone]
   end
@@ -20,7 +32,7 @@ class DebugHandlers < XML::SAX::Handlers
     p [:element_decl, name, content]
   end
 
-  def entity_decl(entity : XML::SAX::EntityDecl) : Nil
+  def entity_decl(entity : XML::SAX::Entity) : Nil
     p [:entity_decl, entity]
   end
 

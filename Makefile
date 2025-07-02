@@ -6,7 +6,7 @@ CRFLAGS =
 
 all: bin/parse_xml
 
-bin/parse_xml: parse_xml.cr src/*.cr src/**.cr
+bin/parse_xml: parse_xml.cr src/*.cr src/**/*.cr
 	@mkdir -p bin
 	$(CRYSTAL) build $(CRFLAGS) $< -o $@
 
