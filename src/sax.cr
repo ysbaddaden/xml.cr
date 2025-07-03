@@ -981,9 +981,12 @@ module XML
           @reader.consume
         end
       end
-      @buffer.to_s
+
+      # HACK: quote is nil when parsing a GERef in an AttValue, in that case we
+      # keep the buffer intact and don't bother generating a string
+      quote ? @buffer.to_s : ""
     ensure
-      @buffer.clear
+      @buffer.clear if quote
     end
 
     protected def parse_encoding : String
