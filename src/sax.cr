@@ -3,6 +3,7 @@
 
 require "string_pool"
 require "./chars"
+require "./sax/attributes"
 require "./sax/element_decl"
 require "./sax/entities"
 require "./sax/handlers"
@@ -41,11 +42,15 @@ module XML
       @base = value
     end
 
-    def self.new(io : IO, handlers : Handlers, entities = Entities.new)
-      new(Reader.new(io), handlers, entities)
+    def self.new(io : IO, handlers : Handlers)
+      new(Reader.new(io), handlers, Entities.new, Hash(String, Attributes).new)
     end
 
-    protected def initialize(@reader : Reader, @handlers : Handlers, @entities = Entities.new)
+    protected def self.new(io : IO, handlers : Handlers, entities : Entities, elements : Hash(String, Attributes))
+      new(Reader.new(io), handlers, entities, elements)
+    end
+
+    protected def initialize(@reader : Reader, @handlers : Handlers, @entities : Entities, @elements : Hash(String, Attributes))
       @buffer = IO::Memory.new
       @name_buffer = IO::Memory.new
       @string_pool = StringPool.new
@@ -175,7 +180,14 @@ module XML
         skip_whitespace
       end
 
-      @reader.set_encoding(encoding) unless encoding.nil? || encoding.blank?
+      unless encoding.nil? || encoding.blank?
+        # sometimes the specified encoding isn't as explicit as the detected
+        # encoding e.g. BOM=UTF-16LE  but encoding="UTF-16"
+        unless @reader.@io.encoding.starts_with?(encoding)
+          @reader.set_encoding(encoding)
+        end
+      end
+
       @handlers.text_decl(version, encoding)
     end
 
@@ -209,7 +221,7 @@ module XML
     private def parse_external_doctype(system_id : String) : Nil
       @handlers.open_external(@base, system_id) do |path, io|
         reader = ExtSubsetReader.new(io, ->pe_callback(String))
-        sax = XML::SAX.new(reader, @handlers, @entities)
+        sax = XML::SAX.new(reader, @handlers, @entities, @elements)
         sax.base = File.dirname(path)
         sax.parse_external_dtd
       end
@@ -342,7 +354,11 @@ module XML
         if entity.external?
           @handlers.open_external(@base, entity.system_id) do |path, io|
             with_reader(ExtSubsetReader.new(io, ->pe_callback(String)), base: File.dirname(path)) do
-              parse_external_dtd
+              if literal
+                parse_entity_value(quote: nil)
+              else
+                parse_external_dtd
+              end
             end
             return true
           end
@@ -392,7 +408,7 @@ module XML
           end
 
           @handlers.open_external(@base, entity.system_id) do |path, io|
-            sax = XML::SAX.new(io, @handlers, @entities)
+            sax = XML::SAX.new(io, @handlers, @entities, @elements)
             sax.base = File.dirname(path)
             sax.parse_external_general_entity
             return true
@@ -471,7 +487,11 @@ module XML
         type, names = parse_att_type
         expect_whitespace
         default, value = parse_default_decl
+
+        attrs = @elements[element_name] ||= Attributes.new
+        attrs[name] ||= Attribute.new(type, names, default, value)
         @handlers.attlist_decl(element_name, name, type, names, default, value)
+
         skip_whitespace
       end
       @reader.auto_expand_pe_refs = false
@@ -552,7 +572,7 @@ module XML
       @handlers.element_decl(name, model)
     end
 
-    protected def parse_content_spec
+    protected def parse_content_spec : ElementDecl
       if @reader.consume?('E', 'M', 'P', 'T', 'Y')
         return ElementDecl::Empty.new
       end
@@ -780,7 +800,8 @@ module XML
           else
             @reader.consume # '<'
             name = parse_name
-            attributes = parse_attributes
+            attributes = parse_attributes(name)
+
             if @reader.consume?('/', '>')
               @handlers.empty_element(name, attributes)
             else
@@ -929,7 +950,7 @@ module XML
       @name_buffer.clear
     end
 
-    protected def parse_attributes : Array({String, String})
+    protected def parse_attributes(element_name : String) : Array({String, String})
       attributes = [] of {String, String}
 
       loop do
@@ -948,6 +969,25 @@ module XML
         skip_whitespace
         value = parse_att_value
         attributes << {name, value}
+      end
+
+      if attrs = @elements[element_name]?
+        # add default attribute values
+        attrs.each do |name, attr|
+          if (default = attr.default?) && !attributes.any? { |(n, _)| n == name }
+            attributes << {name, default}
+          end
+        end
+
+        # post-normalization: non CDATA attribute values must discard leading
+        # and trailing spaces and replace sequences of spaces to a single space
+        #
+        # OPTIMIZE: normalize as we parse (but beware of entity expansions)
+        attributes.each_with_index do |(attr_name, attr_value), i|
+          if (attr = attrs[attr_name]?) && (attr.type != :CDATA)
+            attributes[i] = {attr_name, attr_value.strip(' ').gsub(/[ ]+/, ' ')}
+          end
+        end
       end
 
       attributes
