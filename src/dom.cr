@@ -1,0 +1,5 @@
+require "./dom/parent_node"
+require "./dom/child_node"
+require "./dom/non_document_type_child_node"
+require "./dom/non_element_parent_node"
+require "./dom/*"

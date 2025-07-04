@@ -1,18 +1,36 @@
 # Copyright 2025 Julien PORTALIER
 # Distributed under the Apache-2.0 LICENSE
 
+require "./src/dom/parser"
 require "./src/sax"
 
 class DebugHandlers < XML::SAX::Handlers
-  ROOT_PATH = Path.new(Dir.current)
+  ROOT_PATH = Path.new(Dir.current).expand
 
-  def open_external_file(uri : String, &block : IO ->) : Nil
+  def open_external(base : String?, uri : String, & : (String, IO) ->) : Nil
+    try_open(base, uri) do |path, relative_path|
+      File.open(path, "r") { |file| yield relative_path, file }
+    end
+  end
+
+  def open_external(base : String?, uri : String) : {String, IO}?
+    try_open(base, uri) do |path, relative_path|
+      return relative_path, File.new(path, "r")
+    end
+  end
+
+  # Only opens the file at *uri* if its a local file under the current
+  # directory.
+  private def try_open(base, uri, &)
     if uri =~ %r{^(\w+)://(.*)$}
       return unless $1 == "file"
       uri = $2
     end
-    if (ROOT_PATH.join(uri).expand <=> ROOT_PATH).positive?
-      File.open(uri, &block)
+
+    path = ROOT_PATH.join(base, uri).expand
+
+    if (path <=> ROOT_PATH).positive?
+      yield path, path.relative_to(ROOT_PATH).to_s
     end
   end
 
@@ -81,7 +99,40 @@ class DebugHandlers < XML::SAX::Handlers
   end
 end
 
-File.open(ARGV[0], "r") do |file|
-  sax = XML::SAX.new(file, DebugHandlers.new)
-  sax.parse
+source = nil
+dom = false
+canon = false
+
+ARGV.each do |arg|
+  case arg
+  # when "--doctype" then doctype = true
+  # when "--entity" then entity = true
+  when "--dom" then dom = true
+  when "--canon", "--canonicalize" then canon = true
+  when .starts_with?("-")
+    abort "fatal: unknown argument #{arg}"
+  else
+    source ||= arg
+  end
+end
+
+unless source
+  abort "fatal: missing source"
+end
+
+File.open(source, "r") do |file|
+  base = File.dirname(source)
+  if dom
+    document = XML::DOM.parse(file, base)
+    if canon
+      document.root.canonicalize
+      p document.root
+    else
+      p document
+    end
+  else
+    sax = XML::SAX.new(file, DebugHandlers.new)
+    sax.base = base
+    sax.parse
+  end
 end
