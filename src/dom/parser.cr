@@ -95,7 +95,13 @@ module XML::DOM
 
     protected def start_element_impl(name, attributes)
       element = Element.new(name, @document)
-      attributes.each { |(k, v)| element.attributes[k] = v }
+
+      attributes.each do |(k, v)|
+        if element.attributes[k]?
+          error "Duplicate attribute name #{k.inspect}", @sax.location
+        end
+        element.attributes[k] = v
+      end
 
       if @node.is_a?(Document)
         # WF: element.name should eq document.doctype.name (if doctype)
