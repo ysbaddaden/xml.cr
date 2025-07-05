@@ -40,6 +40,10 @@ module XML::DOM
 
     def parse : Nil
       @sax.parse
+
+      unless @document.root?
+        error "No root element", @sax.location
+      end
     end
 
     def xml_decl(version : String, encoding : String?, standalone : Bool?) : Nil
@@ -107,8 +111,8 @@ module XML::DOM
 
     def end_element(name : String) : Nil
       expect :CONTENT
-      if !@node.is_a?(Element) && (node_name = @node.as(Element).name) != name
-        raise XML::Error.new("End tag mismatch: expected #{node_name.inspect} but got #{name.inspect}", @sax.location)
+      if (curr = @node).is_a?(Element) && (curr.name != name)
+        raise XML::Error.new("End tag mismatch: expected #{curr.name.inspect} but got #{name.inspect}", @sax.location)
       end
       if parent = @node.parent_node?
         @node = parent
