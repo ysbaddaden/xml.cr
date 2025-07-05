@@ -1,4 +1,6 @@
 /bin
 /docs
 /lib
+/local.mk
+/spec/xmlconf_spec.cr
 /xmlconf

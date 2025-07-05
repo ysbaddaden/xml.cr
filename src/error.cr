@@ -7,7 +7,7 @@ module XML
   class Error < Exception
     getter location : Location
 
-    def initialize(@message : String, @location : Location)
+    def initialize(@message : String, @location : Location, @cause : Exception? = nil)
     end
 
     def message : String

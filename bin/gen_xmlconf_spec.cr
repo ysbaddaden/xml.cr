@@ -2,7 +2,7 @@
 require "../src/dom/parser"
 
 DISABLED = [
-  "xmlconf/eduni/errata-3e/E13.xml", # can't pass: invalid because of undeclared entity (parse error)
+  "xmlconf/eduni/errata-3e/E13.xml", # can't pass (undeclared entity is a VC but we still fail and expect the file to parse)
 ]
 
 def gen_testcase(node, xml_base)
@@ -27,18 +27,21 @@ def gen_testcase(node, xml_base)
     when "valid", "invalid"
       puts %(  assert_parses(#{uri.inspect}, #{output.inspect}, #{message.inspect}))
     when "not-wf"
-      puts %(  assert_raises(XML::Error, #{message.inspect}) do)
-      puts %(    File.open(#{uri.inspect}) do |file|)
-      puts %(      XML::DOM.parse(file))
-      puts %(    end)
-      puts %(  end)
+      puts %(  refute_parses(#{uri.inspect}, #{message.inspect}))
+      # puts %(  assert_raises(XML::Error, #{message.inspect}) do)
+      # puts %(    File.open(#{uri.inspect}) do |file|)
+      # puts %(      XML::DOM.parse(file))
+      # puts %(    end)
+      # puts %(  end)
     when "error"
       if uri.starts_with?("xmlconf/japanese")
+        # only an error if we don't support the encodings (we do)
         puts %(  assert_parses(#{uri.inspect}, nil, #{message.inspect}))
       else
-        puts %(  assert_raises(#{message.inspect}) do)
-        puts %(    File.open(#{uri.inspect}) { |file| XML::DOM.parse(file, base: #{File.dirname(uri).inspect}) })
-        puts %(  end)
+        puts %(  refute_parses(#{uri.inspect}, #{message.inspect}))
+        # puts %(  assert_raises(#{message.inspect}) do)
+        # puts %(    File.open(#{uri.inspect}) { |file| XML::DOM.parse(file, base: #{File.dirname(uri).inspect}) })
+        # puts %(  end)
       end
     end
   end
@@ -72,20 +75,20 @@ class XML::DOM::Parser < XML::SAX::Handlers
   ROOT_PATH = Path.new(Dir.current).expand
 
   def open_external(base : String?, uri : String, & : (String, IO) ->) : Nil
-    try_open(base, uri) do |path, relative_path|
+    resolve_external(base, uri) do |path, relative_path|
       File.open(path, "r") { |file| yield relative_path, file }
     end
   end
 
   def open_external(base : String?, uri : String) : {String, IO}?
-    try_open(base, uri) do |path, relative_path|
+    resolve_external(base, uri) do |path, relative_path|
       return relative_path, File.new(path, "r")
     end
   end
 
   # Only opens the file at *uri* if its a local file under the current
   # directory.
-  private def try_open(base, uri, &)
+  private def resolve_external(base, uri, &)
     if uri =~ %r{^(\w+)://(.*)$}
       return unless $1 == "file"
       uri = $2
@@ -100,63 +103,12 @@ class XML::DOM::Parser < XML::SAX::Handlers
 end
 
 document = File.open("xmlconf/xmlconf.xml") do |file|
-  # TODO: enable parsing of external entities
+  # NOTE: assumes that the xmlconf is in the current working directory
   XML::DOM.parse(file, base: "xmlconf")
 end
 
+puts %(require "./spec_helper")
 puts
-puts <<-CRYSTAL
-require "minitest/autorun"
-require "minitest/spec"
-require "./src/dom/parser"
-
-class XML::DOM::Parser < XML::SAX::Handlers
-  ROOT_PATH = Path.new(Dir.current).expand
-
-  def open_external(base : String?, uri : String, & : (String, IO) ->) : Nil
-    try_open(base, uri) do |path, relative_path|
-      File.open(path, "r") { |file| yield relative_path, file }
-    end
-  end
-
-  def open_external(base : String?, uri : String) : {String, IO}?
-    try_open(base, uri) do |path, relative_path|
-      return relative_path, File.new(path, "r")
-    end
-  end
-
-  # Only opens the file at *uri* if its a local file under the current
-  # directory.
-  private def try_open(base, uri, &)
-    if uri =~ %r{^(\w+)://(.*)$}
-      return unless $1 == "file"
-      uri = $2
-    end
-
-    path = ROOT_PATH.join(base, uri).expand
-
-    if (path <=> ROOT_PATH).positive?
-      yield path, path.relative_to(ROOT_PATH).to_s
-    end
-  end
-end
-
-class Minitest::Test
-  def assert_parses(input, output, message, file = __FILE__, line = __LINE__)
-    document = File.open(input) do |file|
-      XML::DOM.parse(file, base: File.dirname(input))
-    end
-
-    if output
-      document.root.canonicalize
-      canon = File.open(output) { |file| XML::DOM.parse(file) }
-      canon.root.canonicalize # NOTE: it's expected to already be canon...
-      assert_equal canon.root.inspect, document.root.inspect, message, file, line
-    end
-  end
-end
-
-CRYSTAL
 
 profile = document.root.attributes["PROFILE"].value
 puts %(describe "#{profile}" do)
