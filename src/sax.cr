@@ -271,8 +271,12 @@ module XML
     protected def parse_pubid_literal : String
       quote = expect '"', '\''
       value = consume_until do |char|
-        # WF: error unless pubid?(char)
-        char == quote
+        if char == quote
+          true
+        else
+          recoverable_error "Invalid Public ID character #{char.inspect}" unless pubid?(char)
+          false
+        end
       end
       expect quote
       value
@@ -422,6 +426,11 @@ module XML
 
           @handlers.open_external(@base, entity.system_id) do |path, io|
             sax = XML::SAX.new(io, @handlers, @entities, @elements)
+            if @reader.version == :XML_1_1
+              # the rules of XML 1.1 apply to the external entity (unless it
+              # specifies a version)
+              sax.@reader.version = :XML_1_1
+            end
             sax.base = File.dirname(path)
             sax.parse_external_general_entity
             return true
@@ -892,7 +901,12 @@ module XML
           when ';'
             @buffer.pos = pos
             @buffer.bytesize = bytesize
-            @buffer << value.chr
+            char = value.chr
+            if char?(@reader.version, char)
+              @buffer << char
+            else
+              recoverable_error "Invalid character reference #{char.inspect}"
+            end
             return
           else
             break
@@ -908,7 +922,12 @@ module XML
           when ';'
             @buffer.pos = pos
             @buffer.bytesize = bytesize
-            @buffer << value.chr
+            char = value.chr
+            if char?(@reader.version, char)
+              @buffer << char
+            else
+              recoverable_error "Invalid character reference #{char.inspect}"
+            end
             return
           else
             break
