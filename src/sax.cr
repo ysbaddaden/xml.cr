@@ -709,8 +709,10 @@ module XML
           @entities.add(parameter, name, value, nil, nil, nil, location)
         else
           public_id, system_id = parse_external_id
-          skip_whitespace
+          expect_whitespace unless @reader.current? == '>'
+
           if @reader.consume?('N', 'D', 'A', 'T', 'A')
+            recoverable_error "NDATA annotation in parameter entity declaration" if parameter
             expect_whitespace
             notation_name = parse_name
             @entities.add(parameter, name, nil, public_id, system_id, notation_name, nil)
