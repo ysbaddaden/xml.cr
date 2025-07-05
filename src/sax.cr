@@ -784,11 +784,20 @@ module XML
     end
 
     protected def parse_comment : Nil
-      # WF: double hyphens (--) isn't allowed within comments
       # WF: grammar doesn't allow ---> to end comment
+      @reader.allow_restricted_chars = true
       data = consume_until do |char|
-        @reader.consume?('-', '-', '>')
+        if @reader.consume?('-', '-', '>')
+          true
+        else
+          if @reader.consume?('-', '-')
+            # WF: double hyphens (--) isn't allowed within comments
+            recoverable_error "Comments cannot contain double-hyphen (--)."
+          end
+          false
+        end
       end
+      @reader.allow_restricted_chars = false
       @handlers.comment(data)
     end
 
