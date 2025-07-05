@@ -849,6 +849,9 @@ module XML
             end
           end
         else
+          if @reader.match?(']', ']', '>')
+            recoverable_error "Character data cannot contain ']]>'."
+          end
           @buffer << char
           @reader.consume
         end
