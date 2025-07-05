@@ -139,18 +139,20 @@ module XML
 
         case attr_name
         when "version"
-          # WF: value can only b "1.0", '1.0', "1.1" or '1.1'
           version = parse_att_value
+          recoverable_error "Invalid version value" unless version.in?("1.0", "1.1")
+          version = version.strip
         when "encoding"
           encoding = parse_encoding
         when "standalone"
-          # WF: expect "yes", 'yes', "no" or 'no'
-          standalone = parse_att_value.compare("yes", case_insensitive: true) == 0
+          value = parse_att_value
+          recoverable_error "Invalid standalone value" unless value.in?("yes", "no")
+          standalone = value.compare("yes", case_insensitive: true) == 0
         else
           recoverable_error("XMLDECL: unexpected attribute #{attr_name.inspect}")
         end
 
-        skip_whitespace
+        expect_whitespace unless @reader.current? == '?'
       end
 
       @reader.set_encoding(encoding) unless encoding.nil? || encoding.blank?
