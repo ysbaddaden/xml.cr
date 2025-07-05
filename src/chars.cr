@@ -14,21 +14,30 @@ module XML
       char.in?(' ', '\t', '\n', '\r')
     end
 
+    # <https://www.w3.org/TR/xml/#NT-Char>
     # <https://www.w3.org/TR/xml11/#NT-Char>
-    def char?(char : Char?) : Bool
-      case char
-      when '\u0001'..'\uD7FF', '\uE000'..'\uFFFD', '\u{10000}'..'\u{10FFFF}'
-        true
+    def char?(version : Symbol, char : Char?) : Bool
+      if version == :XML_1_1
+        case char
+        when '\u0001'..'\uD7FF', '\uE000'..'\uFFFD', '\u{10000}'..'\u{10FFFF}'
+          true
+        else
+          false
+        end
       else
-        false
+        case char
+        when '\u0009', '\u000A', '\u000D', '\u0020'..'\uD7FF', '\uE000'..'\uFFFD', '\u{10000}'..'\u{10FFFF}'
+          true
+        else
+          false
+        end
       end
     end
 
     # <https://www.w3.org/TR/xml11/#NT-RestrictedChar>
     def restricted?(char : Char?) : Bool
       case char
-      when '\u0001'..'\u0008', '\u000B'..'\u000C', '\u0086'..'\u009F',
-        '\u000E'..'\u001F', '\u007F'..'\u0084'
+      when '\u0001'..'\u0008', '\u000B'..'\u000C', '\u000E'..'\u001F', '\u007F'..'\u0084', '\u0086'..'\u009F'
         true
       else
         false

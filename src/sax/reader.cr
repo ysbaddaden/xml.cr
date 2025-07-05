@@ -16,6 +16,8 @@ module XML
     class Reader
       getter location : Location
       property normalize_eol : NormalizeEOL
+      property version : Symbol = :XML_1_0
+      property allow_restricted_chars : Bool = false
       @current : Char?
       @buffer : Deque(Char)
 
@@ -120,6 +122,21 @@ module XML
         true
       end
 
+      # If *chars* match the current and following chars then returns true.
+      def match?(*chars : Char) : Bool
+        char, *rest = chars
+
+        # search for the word
+        unless current? == char
+          return false
+        end
+        rest.each_with_index do |chr, i|
+          return false unless peek(i + 1) == chr
+        end
+
+        true
+      end
+
       # As per <https://www.w3.org/TR/xml11/#sec-line-ends>.
       def normalize_line_endings(char)
         unless @normalize_eol.never?
@@ -207,11 +224,21 @@ module XML
       end
 
       private def io_read_char_impl : Char?
-        {% if flag?(:DEBUG) %}
-          p @io.read_char
-        {% else %}
-          @io.read_char
-        {% end %}
+        char =
+          {% if flag?(:DEBUG) %}
+            p @io.read_char
+          {% else %}
+            @io.read_char
+          {% end %}
+        if char
+          if @version == :XML_1_1 && !allow_restricted_chars && Chars.restricted?(char)
+            raise XML::Error.new("Invalid XML character (restricted).", @location)
+          end
+          unless Chars.char?(@version, char)
+            raise XML::Error.new("Invalid XML character.", @location)
+          end
+        end
+        char
       end
 
       protected def auto_expand_pe_refs=(value : Bool) : Bool
@@ -302,6 +329,7 @@ module XML
         until io_read_char_impl == '>'
           # skip
           # todo: parse version and encoding attributes
+          # todo: replace @version while we parse the replacement (restore it afterwards)
         end
       end
     end

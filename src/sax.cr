@@ -152,7 +152,10 @@ module XML
       end
 
       @reader.set_encoding(encoding) unless encoding.nil? || encoding.blank?
-      @reader.normalize_eol = :always if version == "1.1"
+      if version == "1.1"
+        @reader.version = :XML_1_1
+        @reader.normalize_eol = :always
+      end
       @handlers.xml_decl(version, encoding, standalone)
     end
 
@@ -180,6 +183,8 @@ module XML
         else
           recoverable_error("XMLDECL: unexpected attribute #{attr_name.inspect}")
         end
+
+        @reader.version = :XML_1_1 if version == "1.1"
 
         skip_whitespace
       end
