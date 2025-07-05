@@ -30,6 +30,8 @@ module XML
   class SAX
     include Chars
 
+    property ignore_whitespace : Bool = false
+
     def base : String
       @base.not_nil!
     end
@@ -834,6 +836,8 @@ module XML
     end
 
     protected def parse_character_data : Nil
+      skip_whitespace if ignore_whitespace
+
       while char = @reader.current?
         case char
         when '<'

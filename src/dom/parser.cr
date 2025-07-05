@@ -49,18 +49,17 @@ module XML::DOM
     end
 
     def start_doctype_decl(name : String, system_id : String?, public_id : String?, intsubset : Bool)
-      expect :PROLOG
+      expect :PROLOG, :XMLDECL
 
       doctype = DocumentType.new(name, system_id, public_id, @document)
       @document.doctype = doctype
 
-      if intsubset
-        @node = doctype
-        @state = State::DOCTYPE
-      end
+      @node = doctype
+      @state = State::DOCTYPE
     end
 
     def end_doctype_decl : Nil
+      # expect :DOCTYPE
       @node = @document
       @state = State::PROLOG
     end
@@ -86,7 +85,7 @@ module XML::DOM
     end
 
     def start_element(name : String, attributes : Array({String, String})) : Nil
-      expect :CONTENT, :PROLOG
+      expect :CONTENT, :PROLOG, :XMLDECL
       @node = start_element_impl(name, attributes)
     end
 
@@ -95,7 +94,7 @@ module XML::DOM
       attributes.each { |(k, v)| element.attributes[k] = v }
 
       if @node.is_a?(Document)
-        # WF: if doctype element.name should be document.doctype.name
+        # WF: element.name should eq document.doctype.name (if doctype)
         raise XML::Error.new("Document can't have multiple root elements", @sax.location) if @document.root?
         @document.root = element
         @state = State::CONTENT
@@ -116,24 +115,18 @@ module XML::DOM
       else
         @node = @document
         @state = State::MISC
-        # OPTIMIZE: tell SAX to ignore whitespace
+        @sax.ignore_whitespace = true
       end
     end
 
     def empty_element(name : String, attributes : Array({String, String})) : Nil
-      expect :CONTENT
-      start_element_impl(name, attributes)
+      start_element(name, attributes)
+      end_element(name)
     end
 
     def character_data(data : String) : Nil
-      case @state
-      when State::CONTENT
-        @node.append(Text.new(data, document))
-      when State::MISC
-        # todo: raise unless whitespace (only needed until SAX ignores whitespace)
-      else
-        expect :CONTENT
-      end
+      expect :CONTENT
+      @node.append(Text.new(data, document))
     end
 
     def entity_reference(name : String) : Nil
@@ -147,7 +140,8 @@ module XML::DOM
     end
 
     protected def expect(*states : State)
-      # raise XML::Error.new("Expected #{states.join(" or "}", @sax.location) unless @state.in?(states)
+      return if states.any? { |state| @state == state }
+      raise XML::Error.new("Expected #{states.join(" or ")}", @sax.location)
     end
   end
 end
