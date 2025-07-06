@@ -28,20 +28,12 @@ def gen_testcase(node, xml_base)
       puts %(  assert_parses(#{uri.inspect}, #{output.inspect}, #{message.inspect}))
     when "not-wf"
       puts %(  refute_parses(#{uri.inspect}, #{message.inspect}))
-      # puts %(  assert_raises(XML::Error, #{message.inspect}) do)
-      # puts %(    File.open(#{uri.inspect}) do |file|)
-      # puts %(      XML::DOM.parse(file))
-      # puts %(    end)
-      # puts %(  end)
     when "error"
       if uri.starts_with?("xmlconf/japanese")
         # only an error if we don't support the encodings (we do)
         puts %(  assert_parses(#{uri.inspect}, nil, #{message.inspect}))
       else
         puts %(  refute_parses(#{uri.inspect}, #{message.inspect}))
-        # puts %(  assert_raises(#{message.inspect}) do)
-        # puts %(    File.open(#{uri.inspect}) { |file| XML::DOM.parse(file, base: #{File.dirname(uri).inspect}) })
-        # puts %(  end)
       end
     end
   end
