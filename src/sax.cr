@@ -183,7 +183,7 @@ module XML
 
         index += 1
 
-        p! attr_name = parse_name
+        attr_name = parse_name
         skip_whitespace
         expect '='
         skip_whitespace
