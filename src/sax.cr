@@ -124,6 +124,7 @@ module XML
 
     protected def parse_xml_decl : Nil
       version, encoding, standalone = "1.0", nil, nil
+      index = 0
 
       loop do
         if @reader.current? == '?'
@@ -132,6 +133,8 @@ module XML
           break
         end
 
+        index += 1
+
         attr_name = parse_name
         skip_whitespace
         expect '='
@@ -139,17 +142,21 @@ module XML
 
         case attr_name
         when "version"
-          version = parse_att_value
-          recoverable_error "Invalid version value" unless version.in?("1.0", "1.1")
-          version = version.strip
+          # WF: version must come first
+          recoverable_error "The version info must come first in XMLDECL" unless index == 1
+          version = parse_version_info
         when "encoding"
+          # WF: encoding must follow versioninfo
+          recoverable_error "The encoding declaration must come second" unless index == 2
           encoding = parse_encoding
         when "standalone"
+          # WF: standalong must follow versioninfo and encoding (if present)
+          recoverable_error "The standalone declaration must come after version info and encoding declaration" unless index > 1
           value = parse_att_value
           recoverable_error "Invalid standalone value" unless value.in?("yes", "no")
           standalone = value.compare("yes", case_insensitive: true) == 0
         else
-          recoverable_error("XMLDECL: unexpected attribute #{attr_name.inspect}")
+          recoverable_error("Unexpected attribute #{attr_name.inspect} in XMLDECL")
         end
 
         expect_whitespace unless @reader.current? == '?'
@@ -165,6 +172,7 @@ module XML
 
     protected def parse_text_decl : Nil
       version, encoding = "1.0", nil
+      index = 0
 
       loop do
         if @reader.current? == '?'
@@ -173,25 +181,28 @@ module XML
           break
         end
 
-        attr_name = parse_name
+        index += 1
+
+        p! attr_name = parse_name
         skip_whitespace
         expect '='
         skip_whitespace
 
         case attr_name
         when "version"
-          # WF: value can only b "1.0", '1.0', "1.1" or '1.1'
-          version = parse_att_value
+          recoverable_error "The version info must come first in TEXTDECL" unless index == 1
+          version = parse_version_info
         when "encoding"
           encoding = parse_encoding
         else
-          recoverable_error("XMLDECL: unexpected attribute #{attr_name.inspect}")
+          recoverable_error("Unexpected attribute #{attr_name.inspect} in TEXTDECL")
         end
-
-        @reader.version = :XML_1_1 if version == "1.1"
 
         skip_whitespace
       end
+
+      @reader.version = :XML_1_1 if version == "1.1"
+      recoverable_error "Missing encoding declaration in TEXTDECL" unless encoding
 
       unless encoding.nil? || encoding.blank?
         # sometimes the specified encoding isn't as explicit as the detected
@@ -202,6 +213,23 @@ module XML
       end
 
       @handlers.text_decl(version, encoding)
+    end
+
+    def parse_version_info : String
+      version = parse_att_value
+
+      if version[0].whitespace? || version[-1].whitespace?
+        recoverable_error "Invalid version info"
+        version = version.strip
+      end
+
+      # WF: XML 1.1 only accepts "1.1"
+      # WF: XML 1.0 5th edition accepts /1\.[0-9]+/ and assumes 1.0
+      unless version.in?("1.0", "1.1") || ((v = version.to_f?) && (1.0 <= v < 2.0))
+        recoverable_error "Invalid version number"
+      end
+
+      version
     end
 
     protected def parse_doctype_decl : Nil
