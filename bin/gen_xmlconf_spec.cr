@@ -11,6 +11,13 @@ def gen_testcase(node, xml_base)
   type = node.attributes["TYPE"].value
   entities = node.attributes["ENTITIES"]?
 
+  # we only implement the last XML 1.0 edition (the fifth), skip tests for
+  # previous editions (legacy)
+  if attr = node.attributes["EDITION"]?
+    editions = attr.value.split(' ')
+    return unless editions.includes?("5")
+  end
+
   uri = File.join("xmlconf", xml_base.to_s, node.attributes["URI"].value)
   if attr = node.attributes["OUTPUT"]?
     output = File.join("xmlconf", xml_base.to_s, attr.value)
