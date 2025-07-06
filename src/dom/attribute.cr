@@ -1,3 +1,6 @@
+# Copyright 2025 Julien PORTALIER
+# Distributed under the Apache-2.0 LICENSE
+
 require "./node"
 require "./element"
 
