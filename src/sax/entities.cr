@@ -4,7 +4,7 @@
 module XML
   class SAX
     class Entity
-      getter parameter : Bool
+      getter? parameter : Bool
       getter name : String
       getter! value : String
       getter! public_id : String
@@ -18,10 +18,6 @@ module XML
 
       def general? : Bool
         !@parameter
-      end
-
-      def parameter? : Bool
-        @parameter
       end
 
       def internal? : Bool

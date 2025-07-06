@@ -1,0 +1,20 @@
+Lint/DebugCalls:
+  Excluded:
+  - parse_xml.cr
+
+Lint/Typos:
+  Excluded:
+  - spec/xmlconf_spec.cr
+
+Lint/UselessAssign:
+  Excluded:
+  - bin/gen_xmlconf_spec.cr
+
+Documentation/DocumentationAdmonition:
+  Enabled: false
+
+Metrics/CyclomaticComplexity:
+  MaxComplexity: 15
+
+Naming/BlockParameterName:
+  Enabled: false

@@ -10,5 +10,6 @@ description: |
 development_dependencies:
   minitest:
     github: ysbaddaden/minitest.cr
+    branch: main
 
 license: Apache-2.0

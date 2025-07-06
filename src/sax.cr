@@ -20,7 +20,7 @@ module XML
   # Parses XML documents using a push-parser; whenever something is reached, for
   # example an element starts, or a comment is reached, a callback is called
   # with details about the event. Custom handlers can then do anything they want
-  # using these informations: stream the document while reacting to certain
+  # using these information: stream the document while reacting to certain
   # elements and skipping the rest, or build a complete DOM tree, or a partial
   # tree without declarations, comments or processing instructions.
   #
@@ -30,10 +30,10 @@ module XML
   class SAX
     include Chars
 
-    property ignore_whitespace : Bool = false
+    property? ignore_whitespace : Bool = false
 
     def base : String
-      @base.not_nil!
+      @base.not_nil!("Expected #{self.class.name}#base to not be nil")
     end
 
     def base? : String?
@@ -829,7 +829,7 @@ module XML
     protected def parse_comment : Nil
       # WF: grammar doesn't allow ---> to end comment
       @reader.allow_restricted_chars = true
-      data = consume_until do |char|
+      data = consume_until do |_|
         if @reader.consume?('-', '-', '>')
           true
         else
@@ -877,7 +877,7 @@ module XML
     end
 
     protected def parse_character_data : Nil
-      skip_whitespace if ignore_whitespace
+      skip_whitespace if ignore_whitespace?
 
       while char = @reader.current?
         case char

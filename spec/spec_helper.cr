@@ -35,14 +35,14 @@ end
 
 class Minitest::Test
   def assert_parses(input, output, message, file = __FILE__, line = __LINE__)
-    document = File.open(input) do |file|
-      XML::DOM.parse(file, base: File.dirname(input))
+    document = File.open(input) do |io|
+      XML::DOM.parse(io, base: File.dirname(input))
     end
 
     if output
       document.root.canonicalize
 
-      canon = File.open(output) { |file| XML::DOM.parse(file) }
+      canon = File.open(output) { |io| XML::DOM.parse(io) }
       canon.root.canonicalize # NOTE: it's expected to already be canon...
 
       assert_equal canon.root.inspect, document.root.inspect, message, file, line
@@ -50,9 +50,9 @@ class Minitest::Test
   end
 
   def refute_parses(input, message, file = __FILE__, line = __LINE__)
-    assert_raises(XML::SAX::Error, message) do
-      File.open(input) do |file|
-        XML::DOM.parse(file, base: File.dirname(input))
+    assert_raises(message, file, line) do
+      File.open(input) do |io|
+        XML::DOM.parse(io, base: File.dirname(input))
       end
     end
   end

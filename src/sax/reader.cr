@@ -17,7 +17,7 @@ module XML
       getter location : Location
       property normalize_eol : NormalizeEOL
       property version : Symbol = :XML_1_0
-      property allow_restricted_chars : Bool = false
+      property? allow_restricted_chars : Bool = false
       @current : Char?
       @buffer : Deque(Char)
 
@@ -164,11 +164,10 @@ module XML
 
       # FIXME: changing the encoding while we already have read a `@current_char`
       # may lead to invalid reads afterwards.
-      def set_encoding(encoding : String) : Nil
+      def set_encoding(encoding : String) : Nil # ameba:disable Naming/AccessorMethodName
         @io.set_encoding(encoding)
       end
 
-      # ameba:disable Metrics/CyclomaticComplexity
       def autodetect_encoding! : Nil
         bytes = StaticArray(UInt8, 4).new(0x01_u8)
         @io.read_fully?(bytes.to_slice)
@@ -231,7 +230,7 @@ module XML
             @io.read_char
           {% end %}
         if char
-          if @version == :XML_1_1 && !allow_restricted_chars && Chars.restricted?(char)
+          if @version == :XML_1_1 && !allow_restricted_chars? && Chars.restricted?(char)
             raise Error.new("Invalid XML character (restricted).", @location)
           end
           unless Chars.char?(@version, char)

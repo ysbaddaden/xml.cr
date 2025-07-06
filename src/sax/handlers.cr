@@ -91,7 +91,7 @@ module XML
       #
       # See `#start_element` for details.
       #
-      # Unless overriden, calls `#start_element` then `#end_element` by default.
+      # Unless overridden, calls `#start_element` then `#end_element` by default.
       def empty_element(name : String, attributes : Array({String, String})) : Nil
         start_element(name, attributes)
         end_element(name)
@@ -137,7 +137,7 @@ module XML
       # - *message* details the error.
       # - *location* is the line/column where the parser reached the error.
       #
-      # Unless overriden, raises an `Error` by default.
+      # Unless overridden, raises an `Error` by default.
       def error(message : String, location : Location)
         raise Error.new(message, location)
       end
