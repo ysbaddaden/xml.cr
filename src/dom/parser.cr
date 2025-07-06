@@ -105,7 +105,7 @@ module XML::DOM
 
       if @node.is_a?(Document)
         # WF: element.name should eq document.doctype.name (if doctype)
-        raise XML::Error.new("Document can't have multiple root elements", @sax.location) if @document.root?
+        raise SAX::Error.new("Document can't have multiple root elements", @sax.location) if @document.root?
         @document.root = element
         @state = State::CONTENT
       else
@@ -118,7 +118,7 @@ module XML::DOM
     def end_element(name : String) : Nil
       expect :CONTENT
       if (curr = @node).is_a?(Element) && (curr.name != name)
-        raise XML::Error.new("End tag mismatch: expected #{curr.name.inspect} but got #{name.inspect}", @sax.location)
+        raise SAX::Error.new("End tag mismatch: expected #{curr.name.inspect} but got #{name.inspect}", @sax.location)
       end
       if parent = @node.parent_node?
         @node = parent
@@ -151,7 +151,7 @@ module XML::DOM
 
     protected def expect(*states : State)
       return if states.any? { |state| @state == state }
-      raise XML::Error.new("Expected #{states.join(" or ")}", @sax.location)
+      raise SAX::Error.new("Expected #{states.join(" or ")}", @sax.location)
     end
   end
 end

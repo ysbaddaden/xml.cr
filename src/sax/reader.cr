@@ -1,7 +1,7 @@
 # Copyright 2025 Julien PORTALIER
 # Distributed under the Apache-2.0 LICENSE
 
-require "../error"
+require "./error"
 require "../location"
 
 module XML
@@ -232,10 +232,10 @@ module XML
           {% end %}
         if char
           if @version == :XML_1_1 && !allow_restricted_chars && Chars.restricted?(char)
-            raise XML::Error.new("Invalid XML character (restricted).", @location)
+            raise Error.new("Invalid XML character (restricted).", @location)
           end
           unless Chars.char?(@version, char)
-            raise XML::Error.new("Invalid XML character.", @location)
+            raise Error.new("Invalid XML character.", @location)
           end
         end
         char

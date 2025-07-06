@@ -89,10 +89,10 @@ module XML
       end
 
       parse_content
-    rescue ex : XML::Error
+    rescue ex : SAX::Error
       raise ex
     rescue ex
-      raise XML::Error.new(ex.message || "Internal error", @reader.location, cause: ex)
+      raise SAX::Error.new(ex.message || "Internal error", @reader.location, cause: ex)
     end
 
     # Parse IO as a General Entity (GE).

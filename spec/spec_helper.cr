@@ -50,7 +50,7 @@ class Minitest::Test
   end
 
   def refute_parses(input, message, file = __FILE__, line = __LINE__)
-    assert_raises(XML::Error, message) do
+    assert_raises(XML::SAX::Error, message) do
       File.open(input) do |file|
         XML::DOM.parse(file, base: File.dirname(input))
       end
