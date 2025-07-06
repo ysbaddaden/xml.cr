@@ -5,7 +5,7 @@ module XML
   class SAX
     abstract class ElementDecl
       enum Quantifier
-        NONE = 0
+        NONE     = 0
         OPTIONAL
         REPEATED
         PLUS
@@ -14,7 +14,7 @@ module XML
           case self
           when OPTIONAL then '?'
           when REPEATED then '*'
-          when PLUS then '+'
+          when PLUS     then '+'
           end
         end
       end

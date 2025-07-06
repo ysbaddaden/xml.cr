@@ -977,9 +977,9 @@ module XML
         @reader.consume
 
         case name
-        when "lt" then @buffer << '<'
-        when "gt" then @buffer << '>'
-        when "amp" then @buffer << '&'
+        when "lt"   then @buffer << '<'
+        when "gt"   then @buffer << '>'
+        when "amp"  then @buffer << '&'
         when "apos" then @buffer << '\''
         when "quot" then @buffer << '"'
         else

@@ -51,7 +51,7 @@ module XML
       def add(parameter : Bool, name : String, value : String?, public_id : String?, system_id : String?, notation_name : String?, location : Location?) : Entity
         entity = Entity.new(parameter, name, value, public_id, system_id, notation_name, location)
         hash = parameter ? @parameters : @generals # PE and GE use different namespaces
-        hash[name] = entity unless hash[name]? # only the first declaration encountered is binding
+        hash[name] = entity unless hash[name]?     # only the first declaration encountered is binding
         entity
       end
 

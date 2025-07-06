@@ -107,7 +107,7 @@ ARGV.each do |arg|
   case arg
   # when "--doctype" then doctype = true
   # when "--entity" then entity = true
-  when "--dom" then dom = true
+  when "--dom"                     then dom = true
   when "--canon", "--canonicalize" then canon = true
   when .starts_with?("-")
     abort "fatal: unknown argument #{arg}"
