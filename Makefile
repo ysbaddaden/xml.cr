@@ -17,7 +17,7 @@ bin/parse_xml: parse_xml.cr src/*.cr src/**/*.cr
 # 	./bin/parse_xml $@ $(OPTS)
 
 spec: spec/xmlconf_spec.cr .PHONY
-	$(CRYSTAL) run $(CRFLAGS) $< -- $(OPTS)
+	$(CRYSTAL) run $(CRFLAGS) spec/*_spec.cr spec/**/*_spec.cr -- $(OPTS)
 
 spec/xmlconf_spec.cr: bin/gen_xmlconf_spec.cr xmlconf
 	$(CRYSTAL) run $(CRFLAGS) $< | $(CRYSTAL) tool format - > $@
