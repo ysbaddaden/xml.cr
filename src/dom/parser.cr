@@ -44,6 +44,10 @@ module XML::DOM
       unless @document.root?
         error "No root element", @sax.location
       end
+
+      unless @node == @document
+        error "Missing end element", @sax.location
+      end
     end
 
     def xml_decl(version : String, encoding : String?, standalone : Bool?) : Nil
