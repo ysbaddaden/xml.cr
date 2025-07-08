@@ -4,8 +4,16 @@
 
 require "../src/dom/parser"
 
-DISABLED = [
+SKIPPED = [
   "xmlconf/eduni/errata-3e/E13.xml", # can't pass (undeclared entity is a VC but we still fail and expect the file to parse)
+]
+DISABLED = [
+  "xmlconf/ibm/not-wf/P85/ibm85n01.xml", # P85 don't apply to XML 1.0 5th edition
+  "xmlconf/ibm/not-wf/P85/ibm85n02.xml",
+  "xmlconf/ibm/not-wf/P88/ibm88n01.xml", # P88 don't apply to XML 1.0 5th edition
+  "xmlconf/ibm/not-wf/P88/ibm88n02.xml",
+  "xmlconf/ibm/not-wf/P89/ibm89n01.xml", # P89 don't apply to XML 1.0 5th edition
+  "xmlconf/ibm/not-wf/P89/ibm89n02.xml",
 ]
 
 def gen_testcase(node, xml_base)
@@ -22,6 +30,8 @@ def gen_testcase(node, xml_base)
   end
 
   uri = File.join("xmlconf", xml_base.to_s, node.attributes["URI"].value)
+  return if DISABLED.includes?(uri)
+
   if attr = node.attributes["OUTPUT"]?
     output = File.join("xmlconf", xml_base.to_s, attr.value)
   end
@@ -30,8 +40,8 @@ def gen_testcase(node, xml_base)
   message += " (#{uri})"
 
   puts %(it "#{id} (Section #{sections})" do)
-  if DISABLED.includes?(uri)
-    puts %(  skip "disabled test")
+  if SKIPPED.includes?(uri)
+    puts %(  skip #{"Disabled test: #{message}".inspect})
   else
     case type
     when "valid", "invalid"
