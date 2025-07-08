@@ -44,6 +44,14 @@ module XML
       @base = value
     end
 
+    def version : Symbol
+      @reader.version
+    end
+
+    def version=(value : Symbol)
+      @reader.version = value
+    end
+
     def self.new(io : IO, handlers : Handlers)
       new(Reader.new(io), handlers, Entities.new, Hash(String, Attributes).new)
     end
@@ -263,6 +271,8 @@ module XML
       @handlers.open_external(@base, system_id) do |path, io|
         reader = ExtSubsetReader.new(io, ->pe_callback(String))
         sax = XML::SAX.new(reader, @handlers, @entities, @elements)
+        # the rules of XML 1.1 apply to the external entity
+        sax.version = :XML_1_1 if @reader.version == :XML_1_1
         sax.base = File.dirname(path)
         sax.parse_external_dtd
       end
@@ -454,11 +464,8 @@ module XML
 
           @handlers.open_external(@base, entity.system_id) do |path, io|
             sax = XML::SAX.new(io, @handlers, @entities, @elements)
-            if @reader.version == :XML_1_1
-              # the rules of XML 1.1 apply to the external entity (unless it
-              # specifies a version)
-              sax.@reader.version = :XML_1_1
-            end
+            # the rules of XML 1.1 apply to the external entity
+            sax.version = :XML_1_1 if @reader.version == :XML_1_1
             sax.base = File.dirname(path)
             sax.parse_external_general_entity
             return true
@@ -827,8 +834,8 @@ module XML
     end
 
     protected def parse_comment : Nil
-      # WF: grammar doesn't allow ---> to end comment
       @reader.allow_restricted_chars = true
+
       data = consume_until do |_|
         if @reader.consume?('-', '-', '>')
           true
@@ -840,7 +847,9 @@ module XML
           false
         end
       end
+
       @reader.allow_restricted_chars = false
+
       @handlers.comment(data)
     end
 

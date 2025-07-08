@@ -263,6 +263,11 @@ module XML
         @replaced = [] of IO
       end
 
+      # No-op: restricted chars are always forbidden in extsubset.
+      def allow_restricted_chars=(value : Bool)
+        value
+      end
+
       protected def auto_expand_pe_refs=(value : Bool) : Bool
         @auto_expand_pe_refs = value
       end
