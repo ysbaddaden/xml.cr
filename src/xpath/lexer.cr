@@ -12,7 +12,7 @@ module XML
     end
 
     # :nodoc:
-    class Lexer
+    struct Token
       enum Kind
         Lparen
         Rparen
@@ -37,24 +37,26 @@ module XML
         Name
       end
 
-      # :nodoc:
-      struct Token
-        getter kind : Kind
-        getter! value : String
+      getter kind : Kind
+      getter! value : String
 
-        def initialize(@kind : Kind, @value : String? = nil)
-        end
-
-        def inspect(io : IO)
-          io << '{'
-          kind.to_s(io)
-          if value = @value
-            io << ',' << ' '
-            value.inspect(io)
-          end
-          io << '}'
-        end
+      def initialize(@kind : Kind, @value : String? = nil)
       end
+
+      def inspect(io : IO)
+        io << '{'
+        kind.to_s(io)
+        if value = @value
+          io << ',' << ' '
+          value.inspect(io)
+        end
+        io << '}'
+      end
+    end
+
+    # :nodoc:
+    class Lexer
+      alias Kind = Token::Kind
 
       def self.new(string : String) : self
         new SAX::Reader.new(IO::Memory.new(string))
@@ -256,6 +258,43 @@ module XML
 
       protected def syntax_error(message, location = @start_location)
         raise SyntaxError.new(message, location)
+      end
+
+      # Returns the current token (the last lexed token). Returns `nil` upon
+      # reaching EOF.
+      def current? : Token?
+        @preceding ||= next?
+      end
+
+      # Returns the current token (the last lexed token).
+      def current : Token
+        current? || syntax_error "Expected token"
+      end
+
+      # Consumes and returns the current `Token` if the token is a syntactical
+      # token (no value), such as `.`, `//` or  `[`.
+      def token? : Token?
+        if (tok = @preceding) && tok.value.nil?
+          next?
+          tok
+        end
+      end
+
+      # Consumes and returns the current `Token` if the token is a literal.
+      def literal? : Token?
+        if (tok = @preceding) && (tok.kind == Kind::Literal)
+          next?
+          tok
+        end
+      end
+
+      # Consumes and returns the current `Token` if the token is an operator and
+      # its value is one of *values*.
+      def operator?(*values : String) : Token?
+        if (tok = @preceding) && (tok.kind == Kind::Operator) && tok.value.in?(values)
+          next?
+          tok
+        end
       end
     end
   end
