@@ -30,8 +30,8 @@ References:
 ## XML::DOM
 
 The initial draft for a DOM in Crystal. Follows the DOM spec, adapted for crystal
-(underscore instead of snakeCase names), but keeps the clunky namings. We might
-consider normalizing the API to be much less verbose (maybe).
+(snake_case instead of lowerCamelCase names), but keeps the clunky namings. We
+might consider normalizing the API to be much less verbose (maybe).
 
 References:
 
