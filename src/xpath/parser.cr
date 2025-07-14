@@ -209,10 +209,10 @@ module XML
 
       protected def parse_filter_expr
         expr = parse_primary_expr
+        predicates = parse_predicates?
 
-        if (tok = @lexer.current?) && (tok.kind == Kind::Lsqb)
-          predicate = parse_predicate
-          FilterExpr.new(expr, predicate)
+        if predicates
+          FilterExpr.new(expr, predicates)
         else
           expr
         end

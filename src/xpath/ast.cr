@@ -129,40 +129,19 @@ module XML
       def_equals @expr
     end
 
-    abstract struct Value
-    end
-
-    struct StringValue < Value
-      getter value : String
-
-      def initialize(@value)
-      end
-
-      def_equals @value
-    end
-
-    struct NumberValue < Value
-      getter value : Float64
-
-      def self.new(value : Int::Signed)
-        new value.to_f
-      end
-
-      def initialize(@value)
-      end
-
-      def_equals @value
-    end
-
     class Literal < Expr
-      getter value : Value
+      getter value : Float64 | String
 
-      def self.number(value) : self
-        new NumberValue.new(value)
+      def self.number(value : Int::Signed) : self
+        new value.to_f64
       end
 
-      def self.string(value) : self
-        new StringValue.new(value)
+      def self.number(value : Float64) : self
+        new value
+      end
+
+      def self.string(value : String) : self
+        new value
       end
 
       def initialize(@value)
@@ -192,12 +171,12 @@ module XML
 
     class FilterExpr < Expr
       getter expr : Expr
-      getter! predicate : Expr
+      getter! predicates : Array(Expr)
 
-      def initialize(@expr, @predicate = nil)
+      def initialize(@expr, @predicates = nil)
       end
 
-      def_equals @expr, @predicate
+      def_equals @expr, @predicates
     end
 
     class Path < Expr

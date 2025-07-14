@@ -390,6 +390,33 @@ class XML::XPath::ParserTest < Minitest::Test
       )
   end
 
+  def test_filter_expressions
+    assert_parses %(preceding::foo[1]),
+      Path.relative([
+        Step.new(Axis::Preceding, NodeTest::Name.new("foo"), [Literal.number(1)] of Expr)
+      ])
+
+    assert_parses %(preceding::foo[1][2]),
+      Path.relative([
+        Step.new(Axis::Preceding, NodeTest::Name.new("foo"), [
+          Literal.number(1),
+          Literal.number(2),
+        ] of Expr)
+      ])
+
+    assert_parses %((preceding::foo)[1]),
+      FilterExpr.new(
+        Path.relative([Step.new(Axis::Preceding, NodeTest::Name.new("foo"))]),
+        [Literal.number(1)] of Expr
+      )
+
+    assert_parses %((preceding::foo)[1][2]),
+      FilterExpr.new(
+        Path.relative([Step.new(Axis::Preceding, NodeTest::Name.new("foo"))]),
+        [Literal.number(1), Literal.number(2)] of Expr
+      )
+  end
+
   def assert_parses(input, expected = nil, message = nil, file = __FILE__, line = __LINE__)
     lexer = Lexer.new(input)
     parser = Parser.new(lexer)
