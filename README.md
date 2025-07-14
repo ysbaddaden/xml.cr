@@ -40,11 +40,16 @@ References:
 
 ## XPATH 1.0
 
-... TODO ...
+The initial draft is capable to tokenize and parse XPATH 1.0 expressions. The
+AST is in flux, it will evolve as evaluation is implemented.
 
 References:
 
 - <https://www.w3.org/TR/xpath-10/>
+
+XPATH 2.0 and later isn't planned for the time being. The spec is far more
+complex: the model is different, XSD data types, control-flow, ... it would
+require to implement most of XQUERY 1.0.
 
 ## LICENSE
 
