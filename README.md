@@ -1,6 +1,6 @@
 # XML
 
-An exploratory shard to handle XML (and later HTML) in pure Crystal.
+An exploratory shard to handle XML ~~(and later HTML)~~ in pure Crystal.
 
 ## XML::SAX (parser)
 
