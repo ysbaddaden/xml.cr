@@ -439,12 +439,12 @@ module XML
 
       expanding?(entity) do
         if entity.internal?
-          return IO::Memory.new(entity.value)
+          return IO::Memory.new(entity.value).as(IO)
         end
 
         if ret = @handlers.open_external(@base, entity.system_id)
           _, io = ret
-          return io
+          return io.as(IO)
         end
       end
 
