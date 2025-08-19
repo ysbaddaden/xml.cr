@@ -137,6 +137,12 @@ module XML
         true
       end
 
+      def skip_s : Nil
+        while (char = current?) && Chars.s?(char)
+          consume?
+        end
+      end
+
       # As per <https://www.w3.org/TR/xml11/#sec-line-ends>.
       def normalize_line_endings(char)
         unless @normalize_eol.never?
